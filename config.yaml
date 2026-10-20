@@ -1,0 +1,147 @@
+# Jarvis Multi-Agent Voice Cockpit Configuration
+
+system:
+  name: "Jarvis"
+  active_timeout_seconds: 30       # Follow-up window without needing wake-word
+  default_assistant: "claude"     # Default assistant if generic wake-word ("Hey Jarvis") is used
+  log_level: "INFO"
+  sound_cues: true                 # Play chimes on wake-word and turn completion
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  silence_threshold: 0.015         # Energy threshold for speech detection
+  silence_duration_ms: 800         # Milliseconds of silence to trigger end of utterance
+  min_speech_duration_ms: 400      # Minimum speech duration to discard noise
+  max_utterance_seconds: 30        # Maximum recording duration before auto-segmenting
+  barge_in_enabled: true           # Interrupt assistant when user speaks
+
+stt:
+  engine: "faster_whisper"         # faster_whisper
+  model_size: "tiny.en"            # tiny.en (ultra fast), base.en, or small.en
+  device: "auto"                   # auto, cuda, or cpu
+  compute_type: "int8"             # int8 for low VRAM/CPU speed
+  beam_size: 5
+  vad_filter: true                 # Built-in Silero VAD (do not retry without VAD — that yields "you")
+
+tts:
+  engine: "piper"                  # piper
+  models_dir: "models/piper"       # relative to jarvis_voice or absolute path
+  playback_speed: 1.05             # Slight speed boost for snappy conversations
+  sentence_streaming: true         # Synthesize and play sentence-by-sentence
+
+# Assistant Definitions & Wake Word Mapping
+assistants:
+  claude:
+    name: "Claude Code"
+    target_id: "claude"
+    cli_cmd: "claude"
+    mode: "headless"               # headless or tmux
+    wake_words:
+      - "claude"
+      - "hey claude"
+      - "ok claude"
+      - "yo claude"
+      - "hello claude"
+    phonetic_variants:
+      - "clod"
+      - "clawed"
+      - "claud"
+      - "cloud"
+    voice: "en_US-ryan-high.onnx"
+    voice_speaker: 0
+    prompt_prefix: ""
+    description: "Deep reasoning, full codebase refactoring & planning"
+
+  grok:
+    name: "Grok"
+    target_id: "grok"
+    cli_cmd: "grok"
+    mode: "headless"
+    wake_words:
+      - "grok"
+      - "hey grok"
+      - "ok grok"
+      - "yo grok"
+      - "hello grok"
+    phonetic_variants:
+      - "grock"
+      - "croc"
+      - "brock"
+      - "grut"
+      - "groot"
+    voice: "en_US-ryan-high.onnx"
+    voice_speaker: 0
+    prompt_prefix: ""
+    description: "Fast implementation, web-aware problem solver"
+
+  antigravity:
+    name: "Antigravity"
+    target_id: "agy"
+    cli_cmd: "agy"
+    mode: "headless"
+    wake_words:
+      - "antigravity"
+      - "anti gravity"
+      - "agy"
+      - "a g y"
+      - "hey antigravity"
+      - "hey agy"
+      - "ok antigravity"
+    phonetic_variants:
+      - "gravity"
+      - "anti-gravity"
+      - "a.g.y."
+    voice: "en_US-libritts-high.onnx"
+    voice_speaker: 12
+    prompt_prefix: ""
+    description: "Google DeepMind Agentic CLI with skills & subagents"
+
+  cursor:
+    name: "Cursor Agent"
+    target_id: "cursor"
+    cli_cmd: "agent"               # ~/.local/bin/agent
+    mode: "headless"
+    wake_words:
+      - "cursor"
+      - "hey cursor"
+      - "ok cursor"
+      - "yo cursor"
+      - "hello cursor"
+    phonetic_variants:
+      - "curser"
+      - "cursir"
+    voice: "en_US-libritts-high.onnx"
+    voice_speaker: 24
+    prompt_prefix: ""
+    description: "Cursor AI Agent for rapid code generation & edits"
+
+  guaardvark:
+    name: "Guaardvark"
+    target_id: "guaardvark"
+    cli_cmd: "guaardvark"
+    mode: "headless"
+    api_url: "http://127.0.0.1:5001/api/chat"
+    wake_words:
+      - "guaardvark"
+      - "hey guaardvark"
+      - "ok guaardvark"
+      - "yo guaardvark"
+    phonetic_variants:
+      - "guard vark"
+      - "guardvark"
+      - "guad vark"
+      - "godvark"
+      - "guard bark"
+    voice: "en_US-libritts-high.onnx"
+    voice_speaker: 42
+    prompt_prefix: ""
+    description: "Local Guaardvark autonomous AI operating system"
+
+# Generic Coordinator Wake Words
+coordinator_wake_words:
+  - "jarvis"
+  - "hey jarvis"
+  - "ok jarvis"
+  - "team"
+  - "hey team"
