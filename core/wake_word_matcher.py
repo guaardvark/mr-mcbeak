@@ -77,23 +77,29 @@ class MultiTargetWakeWordMatcher:
 
     DEFAULT_PREFIXES = ["hey", "ok", "yo", "hello", "hi", "listen", "dear"]
 
-    def __init__(self, config_assistants: Dict[str, dict] = None, coordinator_wake_words: List[str] = None):
+    COUNCIL_TARGET = "team"
+
+    def __init__(self, config_assistants: Dict[str, dict] = None, coordinator_wake_words: List[str] = None,
+                 council_wake_words: List[str] = None):
         self.targets: Dict[str, List[str]] = {}
         self.all_phrases: List[Tuple[str, str]] = []  # (phrase, target_id)
-        
-        if config_assistants:
-            self._load_from_config(config_assistants, coordinator_wake_words or ["jarvis", "team"])
 
-    def _load_from_config(self, assistants: Dict[str, dict], coordinator_words: List[str]):
+        if config_assistants:
+            self._load_from_config(config_assistants, coordinator_wake_words or ["jarvis"], council_wake_words)
+
+    def _load_from_config(self, assistants: Dict[str, dict], coordinator_words: List[str],
+                          council_words: Optional[List[str]] = None):
         """Build phrase lookup tables from config."""
         for target_id, info in assistants.items():
             words = list(info.get("wake_words", []))
             phonetics = list(info.get("phonetic_variants", []))
             self.register_target(target_id, words, phonetics)
 
-        # Register coordinator / broadcast wake words
-        coord_words = coordinator_words or ["jarvis", "hey jarvis", "team", "hey team"]
-        self.register_target("jarvis", coord_words, ["jarviss", "jarvises", "teem"])
+        # Coordinator ("jarvis") routes to one assistant; council ("team") asks them all
+        coord_words = [w for w in (coordinator_words or ["jarvis", "hey jarvis"]) if "team" not in w]
+        self.register_target("jarvis", coord_words, ["jarviss", "jarvises"])
+        if council_words:
+            self.register_target(self.COUNCIL_TARGET, council_words, ["teem"])
 
     def register_target(self, target_id: str, wake_words: List[str], phonetic_variants: List[str] = None):
         """Register a target with its wake words and phonetic variants."""
@@ -121,64 +127,74 @@ class MultiTargetWakeWordMatcher:
 
         self.all_phrases.sort(key=lambda x: len(x[0]), reverse=True)
 
+    # A wake phrase must begin within the first N words of the utterance, so a
+    # name mentioned mid-sentence ("deploy this to the cloud") does not re-route.
+    MAX_START_WORD = 2
+
     def match(self, raw_transcription: str, active_target: Optional[str] = None) -> MatchResult:
         """
-        Check if transcription contains a wake word.
-        If active_target is set and no new wake-word is found, routes to active_target.
+        Check if transcription starts with a wake word (optionally after a short
+        lead-in such as "okay so"). The earliest phrase wins; a longer phrase wins
+        a tie at the same position. If no wake-word is found and active_target is
+        set, the whole utterance is routed to active_target.
         """
         if not raw_transcription or not raw_transcription.strip():
             return MatchResult(detected=False, target=None, remainder="")
 
-        # Normalize text: lowercase, remove punctuation
         text = raw_transcription.lower()
-        text_clean = re.sub(r'[,.:;!?"\'()[\]{}]', ' ', text)
+        text_clean = re.sub(r'[,.:;!?"\'()\[\]{}]', ' ', text)
         text_clean = re.sub(r'\s+', ' ', text_clean).strip()
 
-        # Phase 1: Exact Substring Match (longest first)
+        # Character offsets at which a word may start (first MAX_START_WORD+1 words)
+        word_starts = [0] + [m.end() for m in re.finditer(r' ', text_clean)]
+        allowed_starts = set(word_starts[: self.MAX_START_WORD + 1])
+
+        # Phase 1: exact match at an allowed word start; earliest, then longest
+        best = None
         for phrase, target_id in self.all_phrases:
-            idx = text_clean.find(phrase)
-            if idx != -1:
-                # Check if it starts at beginning or has a word boundary
-                if idx == 0 or text_clean[idx - 1] == ' ':
-                    remainder = text_clean[idx + len(phrase):].strip()
-                    return MatchResult(
-                        detected=True,
-                        target=target_id,
-                        remainder=remainder,
-                        matched_phrase=phrase,
-                        similarity=1.0
-                    )
+            for start in sorted(allowed_starts):
+                if text_clean.startswith(phrase, start):
+                    end = start + len(phrase)
+                    if end < len(text_clean) and text_clean[end] != ' ':
+                        continue
+                    if best is None or start < best[0] or (start == best[0] and len(phrase) > len(best[1])):
+                        best = (start, phrase, target_id)
+                    break
+        if best:
+            start, phrase, target_id = best
+            return MatchResult(
+                detected=True,
+                target=target_id,
+                remainder=text_clean[start + len(phrase):].strip(),
+                matched_phrase=phrase,
+                similarity=1.0
+            )
 
-        # Phase 2: Fuzzy Levenshtein Match (phrases >= 4 chars)
+        # Phase 2: fuzzy Levenshtein match (phrases >= 4 chars), same anchoring
         best_match = None
-        highest_sim = 0.0
-
+        best_key = None
         for phrase, target_id in self.all_phrases:
             if len(phrase) < 4:
                 continue
-
             start, end, sim = fuzzy_index_of(text_clean, phrase, threshold=0.72)
-            if start == -1 or sim <= highest_sim:
-                continue
-            # Whole-word only: "croc" must not match inside "crack"
-            if start > 0 and text_clean[start - 1] != " ":
+            if start == -1 or start not in allowed_starts:
                 continue
             if end < len(text_clean) and text_clean[end] != " ":
                 continue
-            highest_sim = sim
-            remainder = text_clean[end:].strip()
-            best_match = MatchResult(
-                detected=True,
-                target=target_id,
-                remainder=remainder,
-                matched_phrase=phrase,
-                similarity=sim
-            )
-
+            key = (start, -sim)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_match = MatchResult(
+                    detected=True,
+                    target=target_id,
+                    remainder=text_clean[end:].strip(),
+                    matched_phrase=phrase,
+                    similarity=sim
+                )
         if best_match:
             return best_match
 
-        # Phase 3: Active Follow-Up Routing (No wake word found, but active session exists)
+        # Phase 3: active follow-up routing
         if active_target:
             return MatchResult(
                 detected=True,
@@ -188,8 +204,4 @@ class MultiTargetWakeWordMatcher:
                 similarity=1.0
             )
 
-        return MatchResult(
-            detected=False,
-            target=None,
-            remainder=raw_transcription.strip()
-        )
+        return MatchResult(detected=False, target=None, remainder=raw_transcription.strip())

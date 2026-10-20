@@ -6,6 +6,7 @@ system:
   default_assistant: "claude"     # Default assistant if generic wake-word ("Hey Jarvis") is used
   log_level: "INFO"
   sound_cues: true                 # Play chimes on wake-word and turn completion
+  shared_transcript_turns: 6       # How many recent turns of the others each assistant is shown
 
 audio:
   sample_rate: 16000
@@ -14,6 +15,7 @@ audio:
   silence_duration_ms: 800         # Milliseconds of silence to trigger end of utterance
   min_speech_duration_ms: 400      # Minimum speech duration to discard noise
   max_utterance_seconds: 30        # Maximum recording duration before auto-segmenting
+  max_queue_age_seconds: 8         # Speech heard while an assistant was busy is dropped after this
   barge_in_enabled: true           # Interrupt assistant when user speaks
 
 stt:
@@ -27,16 +29,24 @@ stt:
 tts:
   engine: "piper"                  # piper
   models_dir: "models/piper"       # relative to jarvis_voice or absolute path
+  extra_model_dirs: []             # e.g. ["~/guaardvark/backend/tools/voice/piper-models"]
   playback_speed: 1.05             # Slight speed boost for snappy conversations
   sentence_streaming: true         # Synthesize and play sentence-by-sentence
 
 # Assistant Definitions & Wake Word Mapping
+#
+# Per assistant, optional keys:
+#   permissions: readonly | full   readonly (default) = the CLI may read and answer, not edit or run
+#   model:       CLI model override (Claude: e.g. claude-haiku-5-5 for cheaper, faster spoken turns)
+#   workspace:   directory the CLI runs in (default: where jarvis was launched)
+#   timeout_seconds: per-turn limit (default 120)
 assistants:
   claude:
     name: "Claude Code"
     target_id: "claude"
     cli_cmd: "claude"
     mode: "headless"               # headless or tmux
+    permissions: "readonly"        # "full" lets voice commands edit files and run commands
     wake_words:
       - "claude"
       - "hey claude"
@@ -58,6 +68,7 @@ assistants:
     target_id: "grok"
     cli_cmd: "grok"
     mode: "headless"
+    permissions: "readonly"
     wake_words:
       - "grok"
       - "hey grok"
@@ -70,8 +81,8 @@ assistants:
       - "brock"
       - "grut"
       - "groot"
-    voice: "en_US-ryan-high.onnx"
-    voice_speaker: 0
+    voice: "en_US-libritts-high.onnx"   # distinct from Claude's voice for group chat
+    voice_speaker: 3
     prompt_prefix: ""
     description: "Fast implementation, web-aware problem solver"
 
@@ -100,7 +111,7 @@ assistants:
   cursor:
     name: "Cursor Agent"
     target_id: "cursor"
-    cli_cmd: "agent"               # ~/.local/bin/agent
+    cli_cmd: "agent"               # the Cursor Agent CLI binary name
     mode: "headless"
     wake_words:
       - "cursor"
@@ -138,10 +149,20 @@ assistants:
     prompt_prefix: ""
     description: "Local Guaardvark autonomous AI operating system"
 
-# Generic Coordinator Wake Words
+# Generic Coordinator Wake Words (route to the last or default assistant)
 coordinator_wake_words:
   - "jarvis"
   - "hey jarvis"
   - "ok jarvis"
-  - "team"
-  - "hey team"
+
+# Group conversation: everyone answers, each in their own voice, and each sees
+# what the others said. Follow-ups within the window keep going to the team.
+council:
+  wake_words:
+    - "team"
+    - "hey team"
+    - "ok team"
+    - "everyone"
+    - "hey everyone"
+  members: ["claude", "grok", "antigravity", "cursor", "guaardvark"]
+  parallel: true

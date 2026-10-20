@@ -31,7 +31,10 @@ class TTSEngine:
     Manages cached Piper voice models and streams synthesized audio sentences to sounddevice.
     """
 
-    def __init__(self, models_dir: str = "models/piper"):
+    def __init__(self, models_dir: str = "models/piper", playback_speed: float = 1.0,
+                 extra_model_dirs: Optional[list] = None):
+        self.playback_speed = playback_speed
+        self.extra_model_dirs = [Path(os.path.expanduser(d)) for d in (extra_model_dirs or [])]
         p = Path(models_dir)
         if not p.is_absolute():
             project_root = Path(__file__).resolve().parent.parent
@@ -58,13 +61,16 @@ class TTSEngine:
             # 1. Look in local models_dir
             model_path = self.models_dir / model_filename
             
-            # 2. Fallback to Guaardvark voice models if local copy missing
+            # 2. Fall back to any extra model dirs from config (tts.extra_model_dirs)
             if not model_path.exists():
-                fallback_guaardvark = Path("~/guaardvark/backend/tools/voice/piper-models") / model_filename
-                if fallback_guaardvark.exists():
-                    model_path = fallback_guaardvark
+                for d in self.extra_model_dirs:
+                    if (d / model_filename).exists():
+                        model_path = d / model_filename
+                        break
                 else:
-                    raise FileNotFoundError(f"Piper model not found: {model_filename} (searched {self.models_dir})")
+                    raise FileNotFoundError(
+                        f"Piper model not found: {model_filename} (searched {self.models_dir} and {self.extra_model_dirs})"
+                    )
 
             logger.info(f"Loading Piper voice model: {model_path}...")
             voice = PiperVoice.load(str(model_path))
@@ -103,7 +109,11 @@ class TTSEngine:
 
         self._stop_requested.clear()
         voice = self.get_or_load_voice(voice_file)
-        syn_cfg = SynthesisConfig(speaker_id=speaker_id) if (SynthesisConfig and speaker_id > 0) else None
+        # Piper's length_scale is the inverse of speed (0.9 = ~10% faster)
+        rate = speed if speed and speed != 1.0 else (self.playback_speed or 1.0)
+        syn_cfg = None
+        if SynthesisConfig:
+            syn_cfg = SynthesisConfig(speaker_id=speaker_id, length_scale=1.0 / max(rate, 0.25))
 
         self.is_playing = True
 
@@ -131,6 +141,7 @@ class TTSEngine:
 
     def play_sound_cue(self, cue_type: str = "chime"):
         """Generate and play a quick audio earcon (chime or grunt) using synthetic tones."""
+        self.is_playing = True  # so the recorder ignores the cue and its tail
         try:
             sample_rate = 16000
             if cue_type == "chime":
@@ -159,3 +170,5 @@ class TTSEngine:
             sd.wait()
         except Exception as e:
             logger.debug(f"Audio cue playback skipped: {e}")
+        finally:
+            self.is_playing = False

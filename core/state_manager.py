@@ -37,7 +37,10 @@ class StateManager:
             if detected_target == "jarvis":
                 # Coordinator wake-word -> routes to active assistant or default
                 target = self.active_assistant or self.default_assistant
+                if target == "team":
+                    target = self.default_assistant
             else:
+                # Includes "team": the council stays active for follow-ups
                 target = detected_target
 
             self.activate_assistant(target)
@@ -71,10 +74,30 @@ class StateManager:
         logger.debug("State reverted to passive mode.")
 
     def record_turn(self, assistant_id: str, prompt: str, response: str):
-        """Record interaction turn in history."""
+        """Record interaction turn in history (the shared transcript)."""
         self.conversation_history.append({
             "timestamp": time.time(),
             "assistant": assistant_id,
             "prompt": prompt,
             "response": response
         })
+
+    def recent_transcript(self, limit: int = 6, exclude_assistant: Optional[str] = None,
+                          names: Optional[Dict[str, str]] = None) -> str:
+        """
+        The last turns as spoken lines, for an assistant that was not part of
+        them. Its own turns are left out because its CLI session already has them.
+        """
+        names = names or {}
+        lines = []
+        last_prompt = None
+        for turn in self.conversation_history[-limit:]:
+            if exclude_assistant and turn["assistant"] == exclude_assistant:
+                continue
+            who = names.get(turn["assistant"], turn["assistant"].title())
+            reply = " ".join(str(turn["response"]).split())[:400]
+            if turn["prompt"] != last_prompt:  # one user line per question, then every reply to it
+                lines.append(f"User: {turn['prompt']}")
+                last_prompt = turn["prompt"]
+            lines.append(f"{who}: {reply}")
+        return "\n".join(lines)

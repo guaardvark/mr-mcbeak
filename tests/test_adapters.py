@@ -65,11 +65,28 @@ class TestDispatcher(unittest.TestCase):
 class TestGrokAdapter(unittest.TestCase):
 
     def test_final_text_from_json_result(self):
-        raw = '{"type":"result","result":"Four words, as asked."}'
-        self.assertEqual(GrokAdapter._final_text(raw), "Four words, as asked.")
+        adapter = GrokAdapter({"target_id": "grok"})
+        raw = '{"text":"Four words, as asked.","sessionId":"abc-123"}'
+        self.assertEqual(adapter._final_text(raw), "Four words, as asked.")
+        self.assertEqual(adapter.session_id, "abc-123")
 
     def test_final_text_fallback_plain(self):
-        self.assertEqual(GrokAdapter._final_text("just a sentence"), "just a sentence")
+        adapter = GrokAdapter({"target_id": "grok"})
+        self.assertEqual(adapter._final_text("just a sentence"), "just a sentence")
+
+    def test_readonly_is_default(self):
+        self.assertTrue(GrokAdapter({"target_id": "grok"}).readonly)
+        self.assertFalse(GrokAdapter({"target_id": "grok", "permissions": "full"}).readonly)
+
+
+class TestSharedTranscript(unittest.TestCase):
+
+    def test_transcript_groups_replies_and_excludes_self(self):
+        sm = StateManager()
+        sm.record_turn("claude", "which db", "Postgres.")
+        sm.record_turn("grok", "which db", "SQLite is fine.")
+        text = sm.recent_transcript(6, exclude_assistant="grok", names={"claude": "Claude Code"})
+        self.assertEqual(text, "User: which db\nClaude Code: Postgres.")
 
 
 if __name__ == "__main__":

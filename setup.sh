@@ -11,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 MODELS_PIPER="$SCRIPT_DIR/models/piper"
 MODELS_WHISPER="$SCRIPT_DIR/models/whisper"
+# Reuse Guaardvark voice models if a checkout is present (override with GUAARDVARK_PIPER_DIR)
+GUAARDVARK_PIPER_DIR="${GUAARDVARK_PIPER_DIR:-${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models}"
 
 echo "=========================================================================="
 echo "🎙️  Setting up Jarvis Multi-Agent Voice Cockpit (Tony Stark Edition)..."
@@ -36,9 +38,9 @@ echo "📦 Installing / verifying Python dependencies..."
 echo "🔊 Checking Piper TTS voice models in $MODELS_PIPER..."
 
 if [ ! -f "$MODELS_PIPER/en_US-ryan-high.onnx" ]; then
-    if [ -f "${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models/en_US-ryan-high.onnx" ]; then
+    if [ -f "${GUAARDVARK_PIPER_DIR}/en_US-ryan-high.onnx" ]; then
         echo "   • Copying Ryan voice from local Guaardvark tools..."
-        cp ${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models/en_US-ryan-high.onnx* "$MODELS_PIPER/"
+        cp ${GUAARDVARK_PIPER_DIR}/en_US-ryan-high.onnx* "$MODELS_PIPER/"
     else
         echo "   • Downloading Ryan high voice from HuggingFace..."
         wget -q --show-progress -O "$MODELS_PIPER/en_US-ryan-high.onnx" \
@@ -49,9 +51,9 @@ if [ ! -f "$MODELS_PIPER/en_US-ryan-high.onnx" ]; then
 fi
 
 if [ ! -f "$MODELS_PIPER/en_US-libritts-high.onnx" ]; then
-    if [ -f "${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models/en_US-libritts-high.onnx" ]; then
+    if [ -f "${GUAARDVARK_PIPER_DIR}/en_US-libritts-high.onnx" ]; then
         echo "   • Copying LibriTTS voice from local Guaardvark tools..."
-        cp ${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models/en_US-libritts-high.onnx* "$MODELS_PIPER/"
+        cp ${GUAARDVARK_PIPER_DIR}/en_US-libritts-high.onnx* "$MODELS_PIPER/"
     else
         echo "   • Downloading LibriTTS multi-speaker voice from HuggingFace..."
         wget -q --show-progress -O "$MODELS_PIPER/en_US-libritts-high.onnx" \

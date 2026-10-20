@@ -2,6 +2,7 @@
 Guaardvark System Adapter.
 Invokes local Guaardvark via REST API or CLI (`guaardvark ask "<prompt>"`).
 """
+import json
 import shutil
 import requests
 import logging
@@ -18,7 +19,7 @@ class GuaardvarkAdapter(BaseAdapter):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(name="Guaardvark", target_id="guaardvark", config=config)
-        self.cli_binary = shutil.which("guaardvark") or "~/.local/bin/guaardvark"
+        self.cli_binary = shutil.which(config.get("cli_cmd") or "guaardvark") or "guaardvark"
         self.api_url = config.get("api_url", "http://127.0.0.1:5001/api/chat")
 
     def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
@@ -41,5 +42,24 @@ class GuaardvarkAdapter(BaseAdapter):
             logger.debug(f"Guaardvark API offline ({e}), falling back to CLI")
 
         # Fallback to CLI
-        cmd = [self.cli_binary, "--timeout", "10", "ask", prompt]
-        return self.run_subprocess(cmd, cwd=cwd, timeout=60)
+        cmd = [self.cli_binary, "--json", "--timeout", "30", "ask", prompt]
+        raw = self.run_subprocess(cmd, cwd=cwd, timeout=60)
+        return self._cli_reply(raw)
+
+    @staticmethod
+    def _cli_reply(raw: str) -> str:
+        """`guaardvark --json ask` prints {"status": ..., "data": {"response": ..., "session_id": ...}}."""
+        blob = (raw or "").strip()
+        start = blob.find("{")
+        if start == -1:
+            return blob
+        try:
+            data = json.loads(blob[start:])
+        except json.JSONDecodeError:
+            return blob
+        inner = data.get("data") if isinstance(data.get("data"), dict) else data
+        for key in ("response", "message", "text"):
+            val = inner.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return blob

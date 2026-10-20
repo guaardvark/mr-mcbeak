@@ -22,6 +22,7 @@ from core.stt_engine import STTEngine, is_whisper_hallucination
 from core.tts_engine import TTSEngine
 from core.audio_recorder import AudioRecorder
 from core.state_manager import StateManager
+from core.council import build_prompt, run_council
 from adapters.dispatcher import AdapterDispatcher
 from terminal.tmux_bridge import TmuxBridge
 
@@ -55,12 +56,14 @@ def print_banner(assistants: dict):
         wake = a.get("wake_words", [k])[0]
         voice = a.get("voice", "en_US-ryan-high.onnx")
         print(f"║     • '{wake:<18}' ➔  {name:<16} (Voice: {voice[:15]})")
-    print(f"║     • 'Hey Jarvis'        ➔  Broadcast / Default Coordinator        ║")
+    print(f"║     • 'Hey Jarvis'        ➔  Default / last assistant                ║")
+    print(f"║     • 'Hey Team'          ➔  Everyone answers (group conversation)    ║")
     print(f"║                                                                              ║")
     print(f"║  ⚡ Features:                                                                 ║")
-    print(f"║     • 30s Active Follow-Up: Keep talking without repeating wake-words       ║")
-    print(f"║     • Barge-In Interruption: Speak mid-sentence to immediately silence audio ║")
-    print(f"║     • Dual-Mode: Headless background daemon or Tmux split-screen cockpit    ║")
+    print(f"║     • Follow-up window: keep talking without repeating the wake-word       ║")
+    print(f"║     • Each assistant remembers its conversation (CLI sessions resume)      ║")
+    print(f"║     • Barge-in: speak over the assistant to stop it (headphones advised)   ║")
+    print(f"║     • Read-only by default; set permissions: full per assistant to allow edits ║")
     print(f"╚══════════════════════════════════════════════════════════════════════════════╝\n")
 
 
@@ -73,6 +76,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     system_cfg = config.get("system", {})
 
     print_banner(assistants_cfg)
+    logging.getLogger().setLevel(
+        getattr(logging, str(system_cfg.get("log_level", "INFO")).upper(), logging.INFO)
+    )
 
     # 1. Initialize Core Engines
     logger.info("Initializing Jarvis AI Engines...")
@@ -80,10 +86,15 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         active_timeout_seconds=system_cfg.get("active_timeout_seconds", 30.0),
         default_assistant=system_cfg.get("default_assistant", "claude")
     )
+    council_cfg = config.get("council", {}) or {}
     matcher = MultiTargetWakeWordMatcher(
         config_assistants=assistants_cfg,
-        coordinator_wake_words=config.get("coordinator_wake_words", ["jarvis", "team"])
+        coordinator_wake_words=config.get("coordinator_wake_words", ["jarvis", "hey jarvis"]),
+        council_wake_words=council_cfg.get("wake_words", ["team", "hey team", "everyone", "hey everyone"]),
     )
+    display_names = {k: a.get("name", k.title()) for k, a in assistants_cfg.items()}
+    for k, a in assistants_cfg.items():
+        display_names[a.get("target_id", k)] = a.get("name", k.title())
     stt = STTEngine(
         model_size=stt_cfg.get("model_size", "tiny.en"),
         device=stt_cfg.get("device", "auto"),
@@ -93,9 +104,23 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     )
     stt.load_model()
 
-    tts = TTSEngine(models_dir=tts_cfg.get("models_dir", "~/guaardvark/backend/tools/voice/piper-models"))
+    tts = TTSEngine(
+        models_dir=tts_cfg.get("models_dir", "models/piper"),
+        playback_speed=float(tts_cfg.get("playback_speed", 1.0)),
+        extra_model_dirs=tts_cfg.get("extra_model_dirs") or [],
+    )
     dispatcher = AdapterDispatcher(config_assistants=assistants_cfg)
     tmux = TmuxBridge()
+    council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
+    shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
+
+    def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False):
+        print(f"\n[{display_names.get(member, member).upper()}]:\n{reply}\n")
+        spoken = extract_speakable_text(reply)
+        if announce:
+            spoken = f"{display_names.get(member, member)} says: {spoken}"
+        logger.info(f"Speaking ({member}): {spoken[:120]!r}")
+        tts.speak(spoken, voice_file=voice_file, speaker_id=speaker_id)
 
     if use_tmux:
         if tmux.is_available:
@@ -147,22 +172,30 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 tmux.send_prompt(target, prompt)
                 ack = f"Command sent to {target}."
                 tts.speak(ack, voice_file=dispatcher.adapters[target].voice_file, speaker_id=dispatcher.adapters[target].voice_speaker)
-            else:
-                # Headless execution
-                spoken_hint = (
-                    "Answer in at most three short spoken sentences. "
-                    "Do not narrate tools, subagents, or your process.\n\n"
+            elif target == "team":
+                # Group conversation: everyone answers, in their own voice
+                print(f"\n[TEAM]: asking {', '.join(display_names.get(m, m) for m in council_members)}...\n")
+
+                def transcript_for(member):
+                    return state_mgr.recent_transcript(shared_turns, exclude_assistant=member, names=display_names)
+
+                def on_reply(member, reply, voice_file, speaker_id):
+                    state_mgr.record_turn(member, prompt, reply)
+                    speak_reply(member, reply, voice_file, speaker_id, announce=True)
+
+                run_council(
+                    prompt, council_members, display_names, dispatcher.dispatch, transcript_for,
+                    parallel=bool(council_cfg.get("parallel", True)), on_reply=on_reply,
                 )
-                response, voice_file, speaker_id = dispatcher.dispatch(target, spoken_hint + prompt)
-                print(f"\n[{target.upper()}]:\n{response}\n")
-
-                # State record
+            else:
+                # Headless execution: the CLI session remembers its own turns; add
+                # what the other assistants said so it can follow a group thread
+                transcript = state_mgr.recent_transcript(shared_turns, exclude_assistant=target, names=display_names)
+                full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
+                                           list(display_names.values()))
+                response, voice_file, speaker_id = dispatcher.dispatch(target, full_prompt)
                 state_mgr.record_turn(target, prompt, response)
-
-                # Speak only the conversational reply, not the agent-team dump
-                spoken = extract_speakable_text(response)
-                logger.info(f"Speaking: {spoken[:120]!r}")
-                tts.speak(spoken, voice_file=voice_file, speaker_id=speaker_id)
+                speak_reply(target, response, voice_file, speaker_id)
 
         except Exception as err:
             logger.error(f"Error handling voice utterance: {err}", exc_info=True)
@@ -175,6 +208,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         silence_duration_ms=audio_cfg.get("silence_duration_ms", 800),
         min_speech_duration_ms=audio_cfg.get("min_speech_duration_ms", 400),
         max_utterance_seconds=audio_cfg.get("max_utterance_seconds", 30),
+        max_queue_age_seconds=float(audio_cfg.get("max_queue_age_seconds", 8.0)),
         on_utterance_ready=on_utterance,
         tts_engine=tts if audio_cfg.get("barge_in_enabled", True) else None
     )
@@ -199,7 +233,10 @@ def test_voices(config: dict):
     """Test and preview the voices for all 5 assistants."""
     assistants = config.get("assistants", {})
     tts_cfg = config.get("tts", {})
-    tts = TTSEngine(models_dir=tts_cfg.get("models_dir", "~/guaardvark/backend/tools/voice/piper-models"))
+    tts = TTSEngine(
+        models_dir=tts_cfg.get("models_dir", "models/piper"),
+        playback_speed=float(tts_cfg.get("playback_speed", 1.0)),
+    )
 
     print("\n🔊 Testing Audio Voices for all assistants...\n")
     sample_phrases = {
@@ -239,9 +276,18 @@ def main():
         test_voices(config)
     elif args.cli:
         target, prompt = args.cli
-        dispatcher = AdapterDispatcher(config.get("assistants", {}))
-        resp, voice, speaker = dispatcher.dispatch(target, prompt)
-        print(f"\n[{target.upper()}]:\n{resp}\n")
+        assistants_cfg = config.get("assistants", {})
+        dispatcher = AdapterDispatcher(assistants_cfg)
+        names = {k: a.get("name", k.title()) for k, a in assistants_cfg.items()}
+        if target.lower() == "team":
+            council_cfg = config.get("council", {}) or {}
+            members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
+            for member, reply in run_council(prompt, members, names, dispatcher.dispatch, lambda m: "",
+                                             parallel=bool(council_cfg.get("parallel", True))):
+                print(f"\n[{names.get(member, member).upper()}]:\n{reply}\n")
+        else:
+            resp, voice, speaker = dispatcher.dispatch(target, build_prompt(prompt, target, names.get(target, target), "", []))
+            print(f"\n[{target.upper()}]:\n{resp}\n")
     elif args.tmux:
         run_voice_daemon(config, use_tmux=True)
     elif args.listen:

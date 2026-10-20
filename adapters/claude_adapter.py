@@ -1,6 +1,6 @@
 """
 Claude Code CLI Adapter.
-Invokes Claude Code in print/headless mode: `claude -p "<prompt>"`
+Runs `claude -p --output-format json`, resumes the same session on later turns.
 """
 import shutil
 from typing import Optional, Dict, Any
@@ -14,11 +14,23 @@ class ClaudeAdapter(BaseAdapter):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(name="Claude Code", target_id="claude", config=config)
-        self.cli_binary = shutil.which("claude") or "~/.local/bin/claude"
+        self.cli_binary = shutil.which(config.get("cli_cmd") or "claude") or "claude"
 
     def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
         if not prompt or not prompt.strip():
             return "Yes, how can I help you?"
 
-        cmd = [self.cli_binary, "-p", prompt]
-        return self.run_subprocess(cmd, cwd=cwd, timeout=120)
+        cmd = [self.cli_binary, "-p", "--output-format", "json"]
+        if self.model:
+            cmd += ["--model", self.model]
+        if self.readonly:
+            cmd += ["--permission-mode", "plan"]
+        if self.session_id:
+            cmd += ["--resume", self.session_id]
+        cmd.append(prompt)
+
+        raw = self.run_subprocess(cmd, cwd=cwd)
+        text, session = self.parse_json_reply(raw, ("result",), ("session_id",))
+        if session:
+            self.session_id = session
+        return text or f"{self.name} did not answer."

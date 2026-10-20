@@ -27,6 +27,7 @@ class AudioRecorder:
         silence_duration_ms: int = 800,
         min_speech_duration_ms: int = 400,
         max_utterance_seconds: int = 30,
+        max_queue_age_seconds: float = 8.0,
         on_utterance_ready: Optional[Callable[[np.ndarray], None]] = None,
         tts_engine: Optional[Any] = None
     ):
@@ -36,6 +37,7 @@ class AudioRecorder:
         self.silence_duration_ms = silence_duration_ms
         self.min_speech_duration_ms = min_speech_duration_ms
         self.max_utterance_seconds = max_utterance_seconds
+        self.max_queue_age_seconds = max_queue_age_seconds
         self.on_utterance_ready = on_utterance_ready
         self.tts_engine = tts_engine
 
@@ -135,14 +137,19 @@ class AudioRecorder:
         combined_audio = np.concatenate(self._audio_buffer)
         self._audio_buffer.clear()
         self._is_speaking = False
-        self._utterance_queue.put(combined_audio)
+        self._utterance_queue.put((time.time(), combined_audio))
 
     def _worker_loop(self):
         """Process utterances off the audio callback thread."""
         while self._running or not self._utterance_queue.empty():
             try:
-                audio = self._utterance_queue.get(timeout=0.2)
+                captured_at, audio = self._utterance_queue.get(timeout=0.2)
             except queue.Empty:
+                continue
+            age = time.time() - captured_at
+            if age > self.max_queue_age_seconds:
+                # Heard while an assistant was still working; too old to act on now
+                logger.info(f"Dropping stale utterance ({age:.1f}s old, {len(audio) / self.sample_rate:.1f}s of audio)")
                 continue
             if self.on_utterance_ready:
                 try:

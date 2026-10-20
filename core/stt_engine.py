@@ -103,7 +103,7 @@ class STTEngine:
         """Pre-warm and cache the Whisper model in memory."""
         if not FASTER_WHISPER_AVAILABLE:
             raise RuntimeError(
-                "faster-whisper is not installed. Run with Guaardvark venv: ~/guaardvark/backend/venv/bin/python"
+                "faster-whisper is not installed. Run ./setup.sh to create the Jarvis virtualenv."
             )
 
         if self.model is not None:

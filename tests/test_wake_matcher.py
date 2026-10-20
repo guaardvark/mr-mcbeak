@@ -37,7 +37,9 @@ class TestWakeWordMatcher(unittest.TestCase):
                 "phonetic_variants": ["guard vark", "guardvark", "guad vark", "godvark"]
             }
         }
-        self.matcher = MultiTargetWakeWordMatcher(assistants, coordinator_wake_words=["jarvis", "hey jarvis"])
+        self.matcher = MultiTargetWakeWordMatcher(
+            assistants, coordinator_wake_words=["jarvis", "hey jarvis"], council_wake_words=["team", "hey team"]
+        )
 
     def test_exact_wake_word_extraction(self):
         res = self.matcher.match("Hey Claude, please check the git status")
@@ -94,6 +96,23 @@ class TestWakeWordMatcher(unittest.TestCase):
     def test_croc_does_not_match_inside_crack(self):
         res = self.matcher.match("a crack.")
         self.assertFalse(res.detected)
+
+    def test_name_mid_sentence_does_not_reroute(self):
+        res = self.matcher.match("grok deploy this to the cloud")
+        self.assertEqual(res.target, "grok")
+        self.assertEqual(res.remainder, "deploy this to the cloud")
+        res = self.matcher.match("tell me about the cursor position in vim")
+        self.assertFalse(res.detected)
+
+    def test_short_lead_in_allowed(self):
+        res = self.matcher.match("okay so hey claude run it")
+        self.assertEqual(res.target, "claude")
+        self.assertEqual(res.remainder, "run it")
+
+    def test_team_wake_word_routes_to_council(self):
+        res = self.matcher.match("hey team which database should we use")
+        self.assertEqual(res.target, "team")
+        self.assertEqual(res.remainder, "which database should we use")
 
 
 if __name__ == "__main__":
