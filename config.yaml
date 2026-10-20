@@ -20,9 +20,12 @@ audio:
 
 stt:
   engine: "faster_whisper"         # faster_whisper
-  model_size: "tiny.en"            # tiny.en (ultra fast), base.en, or small.en
+  model_size: "small.en"           # tiny.en, base.en or small.en. Measured 2026-10-20 on an
+                                   # RTX 40-series GPU, 1.7 s clips: small.en 0.04 s/clip on CUDA
+                                   # (0.45 s on CPU), base.en 0.02 s, tiny.en 0.01 s; small.en
+                                   # got the content words right where tiny.en did not.
   device: "auto"                   # auto, cuda, or cpu
-  compute_type: "int8"             # int8 for low VRAM/CPU speed
+  compute_type: "int8"             # int8 works on CPU and CUDA; float16 measured no faster
   beam_size: 5
   vad_filter: true                 # Built-in Silero VAD (do not retry without VAD — that yields "you")
 
@@ -145,6 +148,9 @@ assistants:
       - "guad vark"
       - "godvark"
       - "guard bark"
+      - "wardvark"        # whisper hears a soft g as w
+      - "ward vark"
+      - "waradvark"
     voice: "en_US-libritts-high.onnx"
     voice_speaker: 42
     prompt_prefix: ""
