@@ -20,7 +20,8 @@ class GuaardvarkAdapter(BaseAdapter):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(name="Guaardvark", target_id="guaardvark", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "guaardvark") or "guaardvark"
-        self.api_url = config.get("api_url", "http://127.0.0.1:5001/api/chat")
+        self.api_url = config.get("api_url", "http://127.0.0.1:5000/api/enhanced-chat")
+        self.use_rag = bool(config.get("use_rag", False))  # spoken turns want speed, not a document search
 
     def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
         if not prompt or not prompt.strip():
@@ -30,14 +31,18 @@ class GuaardvarkAdapter(BaseAdapter):
         try:
             resp = requests.post(
                 self.api_url,
-                json={"message": prompt, "session_id": "jarvis_voice"},
-                timeout=30
+                json={"message": prompt, "session_id": "jarvis_voice", "use_rag": self.use_rag},
+                timeout=self.timeout,
             )
             if resp.status_code == 200:
                 data = resp.json()
-                reply = data.get("response") or data.get("message") or data.get("text")
-                if reply:
+                inner = data.get("data") if isinstance(data.get("data"), dict) else data
+                reply = inner.get("response") or inner.get("message") or inner.get("text")
+                if isinstance(reply, str) and reply.strip():
                     return reply.strip()
+                logger.warning(f"Guaardvark API gave no reply text: {str(data)[:200]}")
+            else:
+                logger.warning(f"Guaardvark API HTTP {resp.status_code}, falling back to CLI")
         except Exception as e:
             logger.debug(f"Guaardvark API offline ({e}), falling back to CLI")
 

@@ -132,7 +132,8 @@ assistants:
     target_id: "guaardvark"
     cli_cmd: "guaardvark"
     mode: "headless"
-    api_url: "http://127.0.0.1:5001/api/chat"
+    api_url: "http://127.0.0.1:5000/api/enhanced-chat"   # synchronous chat; the CLI is the fallback
+    use_rag: false                 # true = search indexed documents on every spoken turn (slower)
     wake_words:
       - "guaardvark"
       - "hey guaardvark"
