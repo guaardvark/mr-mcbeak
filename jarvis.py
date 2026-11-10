@@ -13,6 +13,10 @@ import argparse
 import faulthandler
 from pathlib import Path
 
+# Piper and faster-whisper's VAD run ONNX Runtime, which queues Microsoft usage
+# telemetry unless this is set before it loads. No data leaves this machine.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
 # Add project root to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))

@@ -21,4 +21,7 @@ else
     PYTHON_BIN="python3"
 fi
 
+# ONNX Runtime (Piper, Whisper VAD) telemetry stays off for every entry point
+export ORT_DISABLE_TELEMETRY=1
+
 exec "$PYTHON_BIN" "$SCRIPT_DIR/jarvis.py" "$@"
