@@ -39,6 +39,8 @@ class AudioRecorder:
             raise ValueError("Audio capture requires sample_rate: 16000; resampling is not supported.")
         self.barge_in_enabled = barge_in_enabled
         self.last_captured_at = None
+        # (first speech, last speech) of the utterance being handled, monotonic seconds
+        self.last_speech_span = None
         self.on_barge_in = on_barge_in
         self._interrupt = threading.Event()
         self._interrupt_worker = None
@@ -169,7 +171,7 @@ class AudioRecorder:
         self._is_speaking = False
         self._barge_active = False
         self._preroll.clear()
-        item = (time.monotonic(), combined_audio)
+        item = (time.monotonic(), combined_audio, (self._speech_start_time, self._last_speech_time))
         try:
             self._utterance_queue.put_nowait(item)
         except queue.Full:
@@ -183,7 +185,7 @@ class AudioRecorder:
         """Process utterances off the audio callback thread."""
         while self._running or not self._utterance_queue.empty():
             try:
-                captured_at, audio = self._utterance_queue.get(timeout=0.2)
+                captured_at, audio, *span = self._utterance_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
             age = time.monotonic() - captured_at
@@ -192,6 +194,7 @@ class AudioRecorder:
                 logger.info(f"Dropping stale utterance ({age:.1f}s old, {len(audio) / self.sample_rate:.1f}s of audio)")
                 continue
             self.last_captured_at = captured_at
+            self.last_speech_span = span[0] if span else None
             if self.on_utterance_ready:
                 try:
                     self.on_utterance_ready(audio)

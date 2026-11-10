@@ -1,6 +1,7 @@
 """Serialize backend turns while keeping transcription and local controls responsive."""
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 from core.turn_context import TurnContext
 
 
@@ -16,6 +17,8 @@ class Conversation:
         # words added while an assistant is thinking join that question instead
         # of cancelling it
         self.pending = None
+        # The last question sent: (target, prompt, context, time of its last word)
+        self.last_sent = None
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="turn")
 
@@ -30,11 +33,13 @@ class Conversation:
             self.tts.stop()
             self.state.finish_turn()
 
-    def submit(self, context, work, target=None, prompt=None):
+    def submit(self, context, work, target=None, prompt=None, spoken_until=None):
         with self.lock:
             self.cancel()
             self.context = context
             self.pending = (target, prompt, context) if prompt else None
+            if prompt:
+                self.last_sent = (target, prompt, context, spoken_until or time.monotonic())
             self.state.begin_turn()
 
             def run():
@@ -55,6 +60,23 @@ class Conversation:
                 return self.pending[1]
             return None
 
+    def continuation_of(self, target, started_at, window):
+        """The last question to `target` if speech starting at `started_at` carries it on:
+        it began within `window` seconds of that question's last word and before the
+        reply had been spoken in full. A natural pause longer than the end-of-speech
+        silence otherwise splits one sentence into two turns, and with fast replies
+        the first half is answered before the rest is said."""
+        with self.lock:
+            if not self.last_sent or started_at is None:
+                return None
+            sent_target, prompt, context, spoken_until = self.last_sent
+            if sent_target != target or not 0 <= started_at - spoken_until <= window:
+                return None
+            finished = getattr(context, "reply_finished_at", None)
+            if finished is not None and finished <= started_at:
+                return None
+            return prompt
+
     def _answered(self, context):
         if self.pending and self.pending[2] is context:
             self.pending = None
@@ -73,6 +95,8 @@ class Conversation:
                 return
             self.last_reply = (text, voice, speaker)
         self.tts.speak(text, voice_file=voice, speaker_id=speaker, context=context)
+        if not context.cancelled.is_set():
+            context.reply_finished_at = time.monotonic()
 
     def control(self, prompt, target):
         command = prompt.lower().strip(" .!?\t\n")

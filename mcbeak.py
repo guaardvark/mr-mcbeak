@@ -52,6 +52,21 @@ def load_config(config_path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def log_path() -> Path:
+    """Where the conversation log is kept on this machine (never sent anywhere)."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return state / "mcbeak" / "mcbeak.log"
+
+
+def start_file_log():
+    from logging.handlers import RotatingFileHandler
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(handler)
+
+
 def app_name(config: dict) -> str:
     return str((config.get("system") or {}).get("name") or "Voice Cockpit")
 
@@ -101,7 +116,9 @@ def print_banner(config: dict, adapters: dict, default_assistant: str):
         print(f'  {chr(34) + coordinator + " ..." + chr(34):<{width}}the last assistant you used (first: {default_name})')
     print(f'  {chr(34) + "Hey team ..." + chr(34):<{width}}everyone, in turn')
     print("\n  Keep talking for 30 s without a name. Talk over a reply to stop it.")
-    print('  Say "stop", "go to sleep", "new conversation" or "repeat that".\n')
+    print("  Pausing mid-sentence is fine: carry on within a few seconds and it joins up.")
+    print('  Say "stop", "go to sleep", "new conversation" or "repeat that".')
+    print(f"  Ctrl+C or Ctrl+Z quits. Log: {log_path()}\n")
 
 
 def run_voice_daemon(config: dict, use_tmux: bool = False):
@@ -114,6 +131,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
     from core.diagnostics import validate_config
     validate_config(config)
+    start_file_log()
     logging.getLogger().setLevel(
         getattr(logging, str(system_cfg.get("log_level", "INFO")).upper(), logging.INFO)
     )
@@ -156,6 +174,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     print_banner(config, dispatcher.adapters, system_cfg.get("default_assistant", "claude"))
     council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
     shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
+    continuation_s = float(audio_cfg.get("continuation_seconds", 4.0))
 
     def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False, context=None):
         if context and context.cancelled.is_set():
@@ -219,13 +238,20 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 logger.info(f"{target} listening (30s follow-up window, no spoken ack)")
                 return
 
-            earlier = None if use_tmux else conversation.unanswered(target)
+            # Words that carry on the last question join it: said while the assistant
+            # was still working, or within a few seconds of the last word and before
+            # the reply had been spoken in full (a pause, not a new question)
+            span = recorder.last_speech_span or (None, None)
+            earlier, how = None, ""
+            if not use_tmux:
+                earlier, how = conversation.unanswered(target), "added while it was thinking"
+                if not earlier:
+                    earlier = conversation.continuation_of(target, span[0], continuation_s)
+                    how = "carried on after a pause"
             if earlier:
-                # Said while the assistant was still working on the last question:
-                # ask both together rather than dropping the first
                 prompt = f"{earlier} {prompt}"
-                logger.info(f"Adding to the unanswered question for {target}")
-                print(f"\n[You ➔ {target.upper()}, added while it was thinking]: \"{prompt}\"")
+                logger.info(f"Joining with the previous question for {target} ({how})")
+                print(f"\n[You ➔ {target.upper()}, {how}]: \"{prompt}\"")
             else:
                 print(f"\n[You ➔ {target.upper()}]: \"{prompt}\"")
 
@@ -271,7 +297,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 finally:
                     stop_cue()
 
-            conversation.submit(context, execute_turn, target=target, prompt=prompt)
+            conversation.submit(context, execute_turn, target=target, prompt=prompt, spoken_until=span[1])
 
         except Exception as err:
             logger.error(f"Error handling voice utterance: {err}", exc_info=True)
@@ -304,6 +330,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
     signal.signal(signal.SIGINT, sig_handler)
     signal.signal(signal.SIGTERM, sig_handler)
+    # Ctrl+Z would only pause it, still holding the microphone and stalling the
+    # audio graph for other programs, so it quits instead
+    signal.signal(signal.SIGTSTP, sig_handler)
 
     while True:
         time.sleep(0.5)

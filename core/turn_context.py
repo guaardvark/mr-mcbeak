@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -12,6 +13,7 @@ class TurnContext:
     cancelled: threading.Event = field(default_factory=threading.Event)
     started_at: float = field(default_factory=time.monotonic)
     _audible: bool = False
+    reply_finished_at: Optional[float] = None  # set when the reply was spoken in full
 
     def cancel(self):
         self.cancelled.set()

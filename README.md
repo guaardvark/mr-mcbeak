@@ -15,6 +15,10 @@ mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
 mcbeak --cli team "which database should we use"   # ask everyone
 ```
 
+Ctrl+C or Ctrl+Z quits (Ctrl+Z would otherwise leave it paused, still holding the
+microphone). Each session is logged to `~/.local/state/mcbeak/mcbeak.log`, which
+includes what was heard and stays on this machine.
+
 ## Talking to it
 
 - `Hey Claude ...`, `Hey Grok ...`, `Hey Antigravity ...`, `Hey Cursor ...`,
@@ -28,7 +32,10 @@ mcbeak --cli team "which database should we use"   # ask everyone
   also see earlier answers from the current round.
 - For 30 seconds after a reply you can keep talking without a wake word.
 - Anything you add while an assistant is still working on your question joins
-  that question, so it answers both together instead of losing the first.
+  that question, so it answers both together instead of losing the first. The
+  same goes for a pause mid-sentence: carry on within a few seconds
+  (`audio.continuation_seconds`), before the reply has been spoken in full, and
+  the reply stops and the whole sentence is asked again as one question.
 - While an assistant works, a soft two-note pulse plays every few seconds
   (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the

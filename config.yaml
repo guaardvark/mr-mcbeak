@@ -19,6 +19,7 @@ audio:
   max_utterance_seconds: 30        # Maximum recording duration before auto-segmenting
   max_queue_age_seconds: 8         # Speech heard while an assistant was busy is dropped after this
   preroll_ms: 500                  # Audio kept from just before speech starts, so soft first words survive
+  continuation_seconds: 4          # Speech this soon after your last word, before the reply was fully spoken, continues the same question
   barge_in_enabled: true           # Interrupt assistant when user speaks
 
 stt:
@@ -67,7 +68,7 @@ assistants:
       - "claud"
       - "cloud"
     voice: "en_US-libritts-high.onnx"
-    voice_speaker: 0
+    voice_speaker: 430             # male; clearest of 37 male LibriTTS speakers screened 2026-11-10
     prompt_prefix: ""
     description: "Deep reasoning, full codebase refactoring & planning"
 
