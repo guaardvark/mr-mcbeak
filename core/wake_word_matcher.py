@@ -135,6 +135,18 @@ class MultiTargetWakeWordMatcher:
     # name mentioned mid-sentence ("deploy this to the cloud") does not re-route.
     MAX_START_WORD = 2
 
+    # Word characters as match() counts them: anything but spaces and the
+    # punctuation it strips, so word n of the cleaned text is word n of the raw one
+    _RAW_WORD = re.compile(r'[^\s,.:;!?"\'()\[\]{}]+')
+
+    @classmethod
+    def _raw_after(cls, raw: str, clean_prefix: str) -> str:
+        """The raw transcription after as many words as clean_prefix holds, with
+        Whisper's casing and punctuation kept for the assistant to read."""
+        skip = len(clean_prefix.split())
+        words = list(cls._RAW_WORD.finditer(raw))
+        return raw[words[skip].start():].strip() if skip < len(words) else ""
+
     def match(self, raw_transcription: str, active_target: Optional[str] = None) -> MatchResult:
         """
         Check if transcription starts with a wake word (optionally after a short
@@ -169,7 +181,7 @@ class MultiTargetWakeWordMatcher:
             return MatchResult(
                 detected=True,
                 target=target_id,
-                remainder=text_clean[start + len(phrase):].strip(),
+                remainder=self._raw_after(raw_transcription, text_clean[:start + len(phrase)]),
                 matched_phrase=phrase,
                 similarity=1.0
             )
@@ -191,7 +203,7 @@ class MultiTargetWakeWordMatcher:
                 best_match = MatchResult(
                     detected=True,
                     target=target_id,
-                    remainder=text_clean[end:].strip(),
+                    remainder=self._raw_after(raw_transcription, text_clean[:end]),
                     matched_phrase=phrase,
                     similarity=sim
                 )

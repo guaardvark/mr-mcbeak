@@ -45,6 +45,31 @@ logging.basicConfig(
 logger = logging.getLogger("cockpit")
 
 
+def console_detail(verbose: bool):
+    """The terminal shows the conversation; technical lines go to the log file
+    (and to the terminal too with --verbose). Warnings and errors always show."""
+    for handler in logging.getLogger().handlers:
+        if type(handler) is logging.StreamHandler:
+            handler.setLevel(logging.INFO if verbose else logging.WARNING)
+
+
+def _style(code: str, text: str) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if sys.stdout.isatty() else text
+
+
+def show_you(name: str, prompt: str, how: str = ""):
+    note = _style("2", f" ({how})") if how else ""
+    print(f"\n{_style('1', 'You')} → {name}{note}: {prompt}", flush=True)
+
+
+def show_reply(name: str, reply: str):
+    print(f"{_style('1;36', name)}: {reply.strip()}", flush=True)
+
+
+def show_note(text: str):
+    print(_style("2", f"  {text}"), flush=True)
+
+
 def load_config(config_path: str = "config.yaml") -> dict:
     full_path = PROJECT_ROOT / config_path
     if not full_path.exists():
@@ -160,6 +185,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         beam_size=stt_cfg.get("beam_size", 5),
         vad_filter=stt_cfg.get("vad_filter", True),
         hint_words=hint_words(config),
+        language=stt_cfg.get("language", "en"),
     )
     stt.load_model()
 
@@ -172,7 +198,6 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     conversation = Conversation(state_mgr, tts, dispatcher)
     # tmux treats "." and ":" as target separators, so the session name is letters, digits and dashes
     tmux = TmuxBridge(session_name=re.sub(r"[^a-z0-9]+", "-", app_name(config).lower()).strip("-") or "voice-cockpit")
-    print_banner(config, dispatcher.adapters, system_cfg.get("default_assistant", "claude"))
     council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
     shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
     continuation_s = float(audio_cfg.get("continuation_seconds", 4.0))
@@ -180,7 +205,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False, context=None):
         if context and context.cancelled.is_set():
             return
-        print(f"\n[{display_names.get(member, member).upper()}]:\n{reply}\n")
+        show_reply(display_names.get(member, member), reply)
         spoken = extract_speakable_text(reply)
         if announce:
             spoken = f"{display_names.get(member, member)} says: {spoken}"
@@ -215,9 +240,11 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
             if not match.detected:
                 logger.debug("No wake-word or active session detected. Discarding.")
+                show_note(f'heard, no name: "{text}"')
                 return
 
             target = state_mgr.get_routing_target(match.target)
+            shown_name = "Team" if target == "team" else display_names.get(target, target)
             logger.info(f"🎯 Matched Target: [{target.upper()}] (Similarity: {match.similarity:.2f})")
 
             prompt = match.remainder.strip()
@@ -226,6 +253,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 prompt = ""
 
             if conversation.control(prompt, target):
+                show_note(f'"{prompt}"')
                 return
 
             if system_cfg.get("sound_cues", True) and not state_mgr.busy and not tts.is_playing:
@@ -235,7 +263,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 conversation.cancel()
                 # Name-only wake: chime + listen. A spoken ack ate the follow-up
                 # ("Hey <name>" → TTS → user's command discarded as self-echo).
-                print(f"\n[{target.upper()}]: Listening...\n")
+                show_note(f"{shown_name} is listening")
                 logger.info(f"{target} listening (30s follow-up window, no spoken ack)")
                 return
 
@@ -252,9 +280,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             if earlier:
                 prompt = f"{earlier} {prompt}"
                 logger.info(f"Joining with the previous question for {target} ({how})")
-                print(f"\n[You ➔ {target.upper()}, {how}]: \"{prompt}\"")
+                show_you(shown_name, prompt, how)
             else:
-                print(f"\n[You ➔ {target.upper()}]: \"{prompt}\"")
+                show_you(shown_name, prompt)
 
             def execute_turn(context):
                 # Soft pulse while the assistant works (first after 1.5 s), so a long
@@ -331,6 +359,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     )
 
     recorder.start()
+    print_banner(config, dispatcher.adapters, system_cfg.get("default_assistant", "claude"))
 
     # Handle Ctrl+C cleanly
     def sig_handler(sig, frame):
@@ -433,16 +462,18 @@ def main():
     faulthandler.enable()
     parser = argparse.ArgumentParser(description="Voice cockpit for AI coding assistants")
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
-    parser.add_argument("--listen", action="store_true", help="Start continuous voice listener daemon")
+    parser.add_argument("--listen", action="store_true", help="Listen continuously (also what plain `mcbeak` does)")
     parser.add_argument("--tmux", action="store_true", help="Launch 5-pane Tmux Cockpit and voice daemon")
     parser.add_argument("--replace", action="store_true", help="Stop the copy already listening, then start listening")
     parser.add_argument("--stop", action="store_true", help="Stop the copy that is listening")
     parser.add_argument("--test-voice", action="store_true", help="Preview voices for all assistants")
     parser.add_argument("--cli", nargs=2, metavar=("TARGET", "PROMPT"), help="Direct text execution (e.g. --cli claude 'what is 2+2')")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    parser.add_argument("--verbose", action="store_true", help="Also show the technical log lines in the terminal")
 
     args = parser.parse_args()
     config = load_config(args.config)
+    console_detail(args.verbose or str((config.get("system") or {}).get("console", "")).lower() == "verbose")
 
     if args.doctor:
         from core.diagnostics import doctor
@@ -462,16 +493,15 @@ def main():
             for member, reply in run_council(prompt, members, names, dispatcher.dispatch, lambda m: "",
                                              parallel=bool(council_cfg.get("parallel", True)),
                                              reply_order=council_cfg.get("reply_order", "completion")):
-                print(f"\n[{names.get(member, member).upper()}]:\n{reply}\n")
+                show_reply(names.get(member, member), reply)
         else:
             resp, voice, speaker = dispatcher.dispatch(target, build_prompt(prompt, target, names.get(target, target), "", []))
-            print(f"\n[{target.upper()}]:\n{resp}\n")
-    elif args.tmux or args.listen or args.replace:
-        # Checked before any model loads or the microphone opens; held until exit
+            show_reply(names.get(target, target), resp)
+    else:
+        # Plain `mcbeak` listens. Checked before any model loads or the
+        # microphone opens; the lock is held until exit.
         lock = claim_listener(config, replace=args.replace)  # noqa: F841 (kept open)
         run_voice_daemon(config, use_tmux=args.tmux)
-    else:
-        parser.print_help()
 
 
 if __name__ == "__main__":

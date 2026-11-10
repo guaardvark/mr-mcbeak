@@ -94,9 +94,13 @@ class STTEngine:
         compute_type: str = "int8",
         beam_size: int = 5,
         vad_filter: bool = True,
-        hint_words: Optional[str] = None
+        hint_words: Optional[str] = None,
+        language: Optional[str] = "en",
     ):
         self.model_size = model_size
+        # Multilingual models (large-v3-turbo) would otherwise spend time guessing
+        # the language of every clip, and sometimes guess wrong; "auto" lets them
+        self.language = None if str(language or "auto").lower() == "auto" else language
         # Names Whisper should expect ("Mr. McBeak, Claude, Grok"). Rare words like
         # wake names were heard correctly in 14 of 48 synthetic test clips without
         # hints and 40 of 48 with them, with no names invented on noise.
@@ -172,7 +176,7 @@ class STTEngine:
         kwargs = {
             "beam_size": self.beam_size,
             "best_of": 3,
-            "language": "en" if "en" in self.model_size else None,
+            "language": self.language,
             "vad_filter": self.vad_filter,
             "temperature": 0.0,
             "condition_on_previous_text": False,
