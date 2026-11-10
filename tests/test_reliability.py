@@ -89,9 +89,9 @@ class PlaybackTests(unittest.TestCase):
             yield Mock(audio_float_array=np.zeros(100), sample_rate=16000)
         voice.synthesize.side_effect = synthesize
         with patch.object(engine, 'get_or_load_voice', return_value=voice), \
-             patch('core.tts_engine.sd.play') as play:
+             patch('core.tts_engine.sd.OutputStream') as output:
             engine.speak('Hello there.', context=context)
-            play.assert_not_called()
+            output.assert_not_called()
         self.assertFalse(engine.is_playing)
 
     def test_cancelled_turn_does_not_record_history(self):

@@ -48,6 +48,13 @@ class TTSEngine:
         self.is_playing = False
         self._stop_requested = threading.Event()
         self._playback_thread: Optional[threading.Thread] = None
+        # Every PortAudio output call happens on the thread that holds _output_lock;
+        # stop() only bumps _epoch. sounddevice's play()/wait()/stop() share one
+        # module-global stream, and calling them from the speech, barge-in and
+        # chime threads closed the same stream twice at once (SIGSEGV or deadlock).
+        self._output_lock = threading.Lock()
+        self._epoch_lock = threading.Lock()
+        self._epoch = 0
 
     def get_or_load_voice(self, model_filename: str) -> Any:
         """Load and cache a Piper voice model with automatic fallback search."""
@@ -79,13 +86,74 @@ class TTSEngine:
             return voice
 
     def stop(self):
-        """Instant barge-in cancellation: stops audio output and flushes the queue."""
+        """Barge-in cancellation, safe from any thread.
+
+        Playback that began before this call aborts its own stream within one
+        block (~50 ms); this thread never touches PortAudio.
+        """
+        with self._epoch_lock:
+            self._epoch += 1
         self._stop_requested.set()
-        sd.stop()
         with self.audio_queue.mutex:
             self.audio_queue.queue.clear()
         self.is_playing = False
         logger.debug("TTS playback stopped (barge-in interruption).")
+
+    def _cancelled(self, epoch: int, context=None) -> bool:
+        return epoch != self._epoch or bool(context and context.cancelled.is_set())
+
+    def _stream_for(self, stream, sample_rate: int):
+        """Return an open output stream at sample_rate, reusing `stream` when it matches."""
+        if stream is not None:
+            if stream.samplerate == sample_rate:
+                return stream
+            self._close(stream, drain=True)
+        stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="float32")
+        try:
+            stream.start()
+        except Exception:
+            stream.close()
+            raise
+        return stream
+
+    def _write(self, stream, audio: np.ndarray, epoch: int, context=None) -> bool:
+        """Write audio in ~50 ms blocks, checking for cancellation between blocks.
+        Returns True if every block was written."""
+        audio = np.ascontiguousarray(np.asarray(audio, dtype=np.float32).reshape(-1))
+        block = max(1, int(stream.samplerate * 0.05))
+        for start in range(0, len(audio), block):
+            if self._cancelled(epoch, context):
+                return False
+            stream.write(audio[start:start + block])
+        return True
+
+    @staticmethod
+    def _close(stream, drain: bool):
+        try:
+            if drain:
+                stream.stop()   # waits for queued audio to finish playing
+            else:
+                stream.abort()  # drops queued audio now
+        finally:
+            stream.close()
+
+    def play_audio(self, audio: np.ndarray, sample_rate: int, context=None) -> bool:
+        """Play one buffer to completion unless stop() or the context cancels it.
+        Returns True if it played to the end."""
+        epoch = self._epoch
+        with self._output_lock:
+            if self._cancelled(epoch, context):
+                return False
+            self.is_playing = True
+            stream, completed = None, False
+            try:
+                stream = self._stream_for(None, sample_rate)
+                completed = self._write(stream, audio, epoch, context)
+            finally:
+                if stream is not None:
+                    self._close(stream, drain=completed)
+                self.is_playing = False
+            return completed
 
     def speak(
         self,
@@ -108,7 +176,8 @@ class TTSEngine:
         if not sentences:
             sentences = [cleaned]
 
-        if context and context.cancelled.is_set():
+        epoch = self._epoch
+        if self._cancelled(epoch, context):
             return
         self._stop_requested.clear()
         voice = self.get_or_load_voice(voice_file)
@@ -118,35 +187,42 @@ class TTSEngine:
         if SynthesisConfig:
             syn_cfg = SynthesisConfig(speaker_id=speaker_id, length_scale=1.0 / max(rate, 0.25))
 
-        self.is_playing = True
-
-        for sent in sentences:
-            if self._stop_requested.is_set() or (context and context.cancelled.is_set()):
-                break
-
+        with self._output_lock:
+            if self._cancelled(epoch, context):
+                return
+            self.is_playing = True
+            # One stream for the whole reply, so sentences play without reopen gaps
+            stream, completed = None, True
             try:
-                # Synthesize sentence
-                for chunk in voice.synthesize(sent, syn_config=syn_cfg):
-                    if self._stop_requested.is_set() or (context and context.cancelled.is_set()):
+                for sent in sentences:
+                    if self._cancelled(epoch, context):
+                        completed = False
                         break
-
-                    audio_arr = chunk.audio_float_array
-                    sample_rate = chunk.sample_rate
-
-                    # Play chunk
-                    if context:
-                        context.first_audio()
-                    sd.play(audio_arr, samplerate=sample_rate)
-                    sd.wait()
-
-            except Exception as e:
-                logger.error(f"Error synthesizing/playing sentence '{sent[:30]}...': {e}")
-
-        self.is_playing = False
+                    try:
+                        for chunk in voice.synthesize(sent, syn_config=syn_cfg):
+                            if self._cancelled(epoch, context):
+                                completed = False
+                                break
+                            if context:
+                                context.first_audio()
+                            stream = self._stream_for(stream, chunk.sample_rate)
+                            completed = self._write(stream, chunk.audio_float_array, epoch, context)
+                            if not completed:
+                                break
+                    except Exception as e:
+                        logger.error(f"Error synthesizing/playing sentence '{sent[:30]}...': {e}")
+                    if not completed:
+                        break
+            finally:
+                if stream is not None:
+                    try:
+                        self._close(stream, drain=completed)
+                    except Exception as e:
+                        logger.error(f"Error closing TTS output stream: {e}")
+                self.is_playing = False
 
     def play_sound_cue(self, cue_type: str = "chime"):
         """Generate and play a quick audio earcon (chime or grunt) using synthetic tones."""
-        self.is_playing = True  # so the recorder ignores the cue and its tail
         try:
             sample_rate = 16000
             if cue_type == "chime":
@@ -171,9 +247,7 @@ class TTSEngine:
                 audio = 0.2 * np.sin(2 * np.pi * 523.25 * t)
                 audio *= np.linspace(1, 0.1, len(audio))
 
-            sd.play(audio.astype(np.float32), samplerate=sample_rate)
-            sd.wait()
+            # play_audio sets is_playing, so the recorder ignores the cue and its tail
+            self.play_audio(audio, sample_rate)
         except Exception as e:
             logger.debug(f"Audio cue playback skipped: {e}")
-        finally:
-            self.is_playing = False

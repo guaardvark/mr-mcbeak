@@ -10,6 +10,7 @@ import yaml
 import signal
 import logging
 import argparse
+import faulthandler
 from pathlib import Path
 
 # Add project root to sys.path
@@ -286,6 +287,8 @@ def test_voices(config: dict):
 
 
 def main():
+    # A native crash (PortAudio, CTranslate2, onnxruntime) prints every thread's Python stack
+    faulthandler.enable()
     parser = argparse.ArgumentParser(description="Jarvis Multi-Agent Voice Cockpit")
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
     parser.add_argument("--listen", action="store_true", help="Start continuous voice listener daemon")
