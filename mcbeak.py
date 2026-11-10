@@ -33,6 +33,7 @@ from core.conversation import Conversation
 from core.turn_context import TurnContext
 from core.thinking_cue import start_thinking_cue
 from core.council import build_prompt, run_council
+from core.single_instance import InstanceLock, describe, other_copies, stop_copies
 from adapters.dispatcher import AdapterDispatcher
 from terminal.tmux_bridge import TmuxBridge
 
@@ -338,6 +339,52 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         time.sleep(0.5)
 
 
+def claim_listener(config: dict, replace: bool) -> InstanceLock:
+    """Make this the only listening copy, or explain why it cannot be and exit."""
+    lock = InstanceLock()
+    got = lock.acquire()
+    others = other_copies(lock)
+    if got and not others:
+        return lock
+    name = app_name(config)
+    if not replace:
+        lock.release()
+        print(f"\n{name} is already running:", file=sys.stderr)
+        for pid in others:
+            print(f"  {describe(pid)}", file=sys.stderr)
+        print("Only one copy can listen at a time, or both would answer every question.\n"
+              "  mcbeak --replace   stop it and start this one\n"
+              "  mcbeak --stop      just stop it\n", file=sys.stderr)
+        sys.exit(1)
+    for pid in others:
+        print(f"Stopping the copy already running ({describe(pid)})...")
+    left = stop_copies(others)
+    if left:
+        sys.exit(f"Could not stop PID {', '.join(map(str, left))}.")
+    deadline = time.monotonic() + 3.0
+    while not got and time.monotonic() < deadline:
+        time.sleep(0.1)
+        got = lock.acquire()
+    if not got:
+        sys.exit("Another copy started in the meantime; try again.")
+    return lock
+
+
+def stop_listener(config: dict) -> int:
+    others = other_copies()
+    if not others:
+        print(f"{app_name(config)} is not running.")
+        return 0
+    for pid in others:
+        print(f"Stopping {describe(pid)}...")
+    left = stop_copies(others)
+    if left:
+        print(f"Could not stop PID {', '.join(map(str, left))}.", file=sys.stderr)
+        return 1
+    print("Stopped.")
+    return 0
+
+
 def test_voices(config: dict):
     """Test and preview the voices for all 5 assistants."""
     assistants = config.get("assistants", {})
@@ -377,6 +424,8 @@ def main():
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
     parser.add_argument("--listen", action="store_true", help="Start continuous voice listener daemon")
     parser.add_argument("--tmux", action="store_true", help="Launch 5-pane Tmux Cockpit and voice daemon")
+    parser.add_argument("--replace", action="store_true", help="Stop the copy already listening, then start listening")
+    parser.add_argument("--stop", action="store_true", help="Stop the copy that is listening")
     parser.add_argument("--test-voice", action="store_true", help="Preview voices for all assistants")
     parser.add_argument("--cli", nargs=2, metavar=("TARGET", "PROMPT"), help="Direct text execution (e.g. --cli claude 'what is 2+2')")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
@@ -387,6 +436,8 @@ def main():
     if args.doctor:
         from core.diagnostics import doctor
         sys.exit(doctor(config))
+    if args.stop:
+        sys.exit(stop_listener(config))
     if args.test_voice:
         test_voices(config)
     elif args.cli:
@@ -404,10 +455,10 @@ def main():
         else:
             resp, voice, speaker = dispatcher.dispatch(target, build_prompt(prompt, target, names.get(target, target), "", []))
             print(f"\n[{target.upper()}]:\n{resp}\n")
-    elif args.tmux:
-        run_voice_daemon(config, use_tmux=True)
-    elif args.listen:
-        run_voice_daemon(config, use_tmux=False)
+    elif args.tmux or args.listen or args.replace:
+        # Checked before any model loads or the microphone opens; held until exit
+        lock = claim_listener(config, replace=args.replace)  # noqa: F841 (kept open)
+        run_voice_daemon(config, use_tmux=args.tmux)
     else:
         parser.print_help()
 

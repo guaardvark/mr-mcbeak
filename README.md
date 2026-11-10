@@ -10,12 +10,16 @@ assistant in its own voice.
 ```
 ./setup.sh            # venv, Piper voices, ~/.local/bin/mcbeak symlink
 mcbeak --listen       # always-on listener
+mcbeak --replace      # stop the copy already listening and start this one
+mcbeak --stop         # stop the copy that is listening
 mcbeak --test-voice   # hear every assistant's voice
 mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
 mcbeak --cli team "which database should we use"   # ask everyone
 ```
 
-Ctrl+C or Ctrl+Z quits (Ctrl+Z would otherwise leave it paused, still holding the
+Only one copy listens at a time: a second one names the copy already running
+(PID, start time, terminal) and exits before it opens the microphone. Ctrl+C or
+Ctrl+Z quits (Ctrl+Z would otherwise leave it paused, still holding the
 microphone). Each session is logged to `~/.local/state/mcbeak/mcbeak.log`, which
 includes what was heard and stays on this machine.
 
