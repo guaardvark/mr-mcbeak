@@ -17,7 +17,7 @@ class GrokAdapter(BaseAdapter):
         super().__init__(name="Grok", target_id="grok", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "grok") or "grok"
 
-    def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         if not prompt or not prompt.strip():
             return "Grok here, what's on your mind?"
 
@@ -36,7 +36,7 @@ class GrokAdapter(BaseAdapter):
             cmd += ["--resume", self.session_id]
         cmd += ["-p", prompt]
 
-        raw = self.run_subprocess(cmd, cwd=cwd)
+        raw = self.run_subprocess(cmd, cwd=cwd, context=context)
         return self._final_text(raw)
 
     def _final_text(self, raw: str) -> str:

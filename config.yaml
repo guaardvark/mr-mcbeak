@@ -173,3 +173,4 @@ council:
     - "hey everyone"
   members: ["claude", "grok", "antigravity", "cursor", "guaardvark"]
   parallel: true
+  reply_order: completion         # completion (fastest first) or member (configured order)

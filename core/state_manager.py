@@ -21,6 +21,7 @@ class StateManager:
         self.current_mode: str = "passive"  # "passive" or "active"
         self.active_assistant: Optional[str] = None
         self.last_interaction_time: float = 0.0
+        self.busy = False
         self.turn_count: int = 0
         self.conversation_history: list[dict] = []
 
@@ -30,7 +31,7 @@ class StateManager:
         If a new wake target is explicitly detected, switches context.
         Otherwise, if within the active window, stays with the active assistant.
         """
-        now = time.time()
+        now = time.monotonic()
 
         if detected_target:
             # Explicit target (e.g. "Hey Grok", "Hey Claude", "Jarvis")
@@ -57,15 +58,22 @@ class StateManager:
         """Check if we are still within the 30-second follow-up window."""
         if not self.active_assistant:
             return False
-        return (time.time() - self.last_interaction_time) < self.active_timeout_seconds
+        return self.busy or (time.monotonic() - self.last_interaction_time) < self.active_timeout_seconds
 
     def activate_assistant(self, assistant_id: str):
         """Set the active assistant and reset the follow-up timer."""
         self.active_assistant = assistant_id
         self.current_mode = "active"
-        self.last_interaction_time = time.time()
+        self.last_interaction_time = time.monotonic()
         self.turn_count += 1
         logger.info(f"Active assistant set to '{assistant_id}' (active for {self.active_timeout_seconds}s).")
+
+    def begin_turn(self):
+        self.busy = True
+
+    def finish_turn(self):
+        self.busy = False
+        self.last_interaction_time = time.monotonic()
 
     def reset_to_passive(self):
         """Revert back to passive listening mode."""
@@ -81,6 +89,7 @@ class StateManager:
             "prompt": prompt,
             "response": response
         })
+        del self.conversation_history[:-100]
 
     def recent_transcript(self, limit: int = 6, exclude_assistant: Optional[str] = None,
                           names: Optional[Dict[str, str]] = None) -> str:

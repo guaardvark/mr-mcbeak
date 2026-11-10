@@ -16,7 +16,7 @@ class AntigravityAdapter(BaseAdapter):
         super().__init__(name="Antigravity", target_id="antigravity", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "agy") or "agy"
 
-    def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         if not prompt or not prompt.strip():
             return "Antigravity online. Ready for tasks."
 
@@ -28,7 +28,7 @@ class AntigravityAdapter(BaseAdapter):
         if self.session_id:
             cmd += ["--conversation", self.session_id]
 
-        raw = self.run_subprocess(cmd, cwd=cwd)
+        raw = self.run_subprocess(cmd, cwd=cwd, context=context)
         text, session = self.parse_json_reply(raw, ("response", "result"), ("conversation_id",))
         if session:
             self.session_id = session

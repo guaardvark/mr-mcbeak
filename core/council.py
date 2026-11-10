@@ -42,39 +42,66 @@ def run_council(
     dispatch: Callable[[str, str], Tuple[str, str, int]],
     transcript_for: Callable[[str], str],
     parallel: bool = True,
+    context=None,
+    reply_order: str = "completion",
     on_reply: Optional[Callable[[str, str, str, int], None]] = None,
 ) -> List[Tuple[str, str]]:
     """
-    Ask every member the same question. Returns [(member_id, reply)] in member
-    order. on_reply(member_id, reply, voice_file, speaker_id) is called for each
-    reply as soon as it can be spoken in order.
+    Ask every member the same question. Return replies in playback order.
+    Parallel turns snapshot prior context and default to completion order;
+    sequential turns include preceding replies when transcript_for exposes them.
     """
     names = [display_names.get(m, m.title()) for m in members]
+
+    snapshots = {m: transcript_for(m) for m in members} if parallel else {}
 
     def ask(member: str) -> Tuple[str, str, int]:
         full = build_prompt(
             prompt, member, display_names.get(member, member.title()),
-            transcript_for(member), names, council=True, max_sentences=2,
+            snapshots[member] if parallel else transcript_for(member), names, council=True, max_sentences=2,
         )
         try:
-            return dispatch(member, full)
+            if context and context.cancelled.is_set():
+                return "", "en_US-ryan-high.onnx", 0
+            return dispatch(member, full, context=context) if context else dispatch(member, full)
         except Exception as err:  # one member failing must not silence the rest
             logger.error(f"Council member {member} failed: {err}", exc_info=True)
             return f"{display_names.get(member, member)} did not answer.", "en_US-ryan-high.onnx", 0
 
     results: List[Tuple[str, str]] = []
+
+    def deliver(member, result):
+        if context and context.cancelled.is_set():
+            return
+        reply, voice, speaker = result
+        results.append((member, reply))
+        if on_reply:
+            on_reply(member, reply, voice, speaker)
+
     if parallel and len(members) > 1:
-        with ThreadPoolExecutor(max_workers=len(members)) as pool:
-            futures = [(m, pool.submit(ask, m)) for m in members]
-            for member, fut in futures:  # speak in member order, as each finishes
-                reply, voice, speaker = fut.result()
-                results.append((member, reply))
-                if on_reply:
-                    on_reply(member, reply, voice, speaker)
+        pool = ThreadPoolExecutor(max_workers=len(members))
+        futures = {pool.submit(ask, m): m for m in members}
+        pending = set(futures)
+        try:
+            ordered = list(futures)
+            while pending and not (context and context.cancelled.is_set()):
+                candidates = ordered[:1] if reply_order == "member" else list(pending)
+                ready = [f for f in candidates if f.done()]
+                if not ready:
+                    from concurrent.futures import wait, FIRST_COMPLETED
+                    wait(candidates, timeout=0.05, return_when=FIRST_COMPLETED)
+                    continue
+                for future in ready:
+                    pending.remove(future)
+                    ordered.remove(future)
+                    deliver(futures[future], future.result())
+        finally:
+            for future in pending:
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
     else:
         for member in members:
-            reply, voice, speaker = ask(member)
-            results.append((member, reply))
-            if on_reply:
-                on_reply(member, reply, voice, speaker)
+            if context and context.cancelled.is_set():
+                break
+            deliver(member, ask(member))
     return results

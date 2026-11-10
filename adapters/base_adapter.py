@@ -17,6 +17,8 @@ import json
 import subprocess
 import logging
 import os
+import signal
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +41,22 @@ class BaseAdapter(ABC):
         self.session_id: Optional[str] = None
 
     @abstractmethod
-    def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         """
         Execute a prompt synchronously and return the full text response.
         """
         pass
 
+    @property
+    def capabilities(self):
+        return {"readonly": self.target_id != "guaardvark", "cancel_cli": True,
+                "cancel_http": "discard_response"}
+
     def reset_session(self):
         """Forget the CLI conversation; the next turn starts fresh."""
         self.session_id = None
 
-    def run_subprocess(self, cmd: list[str], cwd: Optional[str] = None, timeout: Optional[int] = None) -> str:
+    def run_subprocess(self, cmd: list[str], cwd: Optional[str] = None, timeout: Optional[int] = None, context=None) -> str:
         """
         Helper to run CLI command safely. Returns stdout, or a short spoken error.
         """
@@ -58,14 +65,33 @@ class BaseAdapter(ABC):
         logger.info(f"[{self.name}] Running: {' '.join(cmd[:6])}... (cwd={working_dir})")
 
         try:
-            res = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=working_dir,
-                timeout=timeout,
-                stdin=subprocess.DEVNULL,  # print-mode CLIs wait seconds for piped stdin otherwise
-            )
+            if context and context.cancelled.is_set():
+                return ""
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, cwd=working_dir, stdin=subprocess.DEVNULL,
+                                    start_new_session=True)
+            deadline = time.monotonic() + timeout
+            while True:
+                cancelled = context and context.cancelled.is_set()
+                if cancelled or time.monotonic() >= deadline:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        proc.communicate(timeout=0.5)
+                    except (ProcessLookupError, subprocess.TimeoutExpired):
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        proc.communicate()
+                    if cancelled:
+                        return ""
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                try:
+                    stdout, stderr = proc.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            res = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             if res.returncode != 0:
                 logger.warning(f"[{self.name}] Exit code {res.returncode}: {res.stderr[:300]}")
                 if res.stdout.strip():

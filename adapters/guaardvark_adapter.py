@@ -3,6 +3,7 @@ Guaardvark System Adapter.
 Invokes local Guaardvark via REST API or CLI (`guaardvark ask "<prompt>"`).
 """
 import json
+import uuid
 import shutil
 import requests
 import logging
@@ -21,19 +22,30 @@ class GuaardvarkAdapter(BaseAdapter):
         super().__init__(name="Guaardvark", target_id="guaardvark", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "guaardvark") or "guaardvark"
         self.api_url = config.get("api_url", "http://127.0.0.1:5000/api/enhanced-chat")
+        self.session_id = uuid.uuid4().hex
         self.use_rag = bool(config.get("use_rag", False))  # spoken turns want speed, not a document search
 
-    def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
+    def reset_session(self):
+        self.session_id = uuid.uuid4().hex
+
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         if not prompt or not prompt.strip():
             return "Guaardvark online. Standing by for instructions."
+
+        if self.readonly:
+            return "Guaardvark is unavailable in read-only mode: its API and CLI do not enforce this restriction."
+        if context and context.cancelled.is_set():
+            return ""
 
         # Try REST API first (faster if backend is running)
         try:
             resp = requests.post(
                 self.api_url,
-                json={"message": prompt, "session_id": "jarvis_voice", "use_rag": self.use_rag},
+                json={"message": prompt, "session_id": self.session_id or "jarvis_voice", "use_rag": self.use_rag},
                 timeout=self.timeout,
             )
+            if context and context.cancelled.is_set():
+                return ""
             if resp.status_code == 200:
                 data = resp.json()
                 inner = data.get("data") if isinstance(data.get("data"), dict) else data
@@ -46,9 +58,11 @@ class GuaardvarkAdapter(BaseAdapter):
         except Exception as e:
             logger.debug(f"Guaardvark API offline ({e}), falling back to CLI")
 
+        if context and context.cancelled.is_set():
+            return ""
         # Fallback to CLI
         cmd = [self.cli_binary, "--json", "--timeout", "30", "ask", prompt]
-        raw = self.run_subprocess(cmd, cwd=cwd, timeout=60)
+        raw = self.run_subprocess(cmd, cwd=cwd, timeout=60, context=context)
         return self._cli_reply(raw)
 
     @staticmethod

@@ -93,6 +93,7 @@ class TTSEngine:
         voice_file: str = "en_US-ryan-high.onnx",
         speaker_id: int = 0,
         speed: float = 1.0,
+        context=None,
         block: bool = True
     ):
         """
@@ -107,6 +108,8 @@ class TTSEngine:
         if not sentences:
             sentences = [cleaned]
 
+        if context and context.cancelled.is_set():
+            return
         self._stop_requested.clear()
         voice = self.get_or_load_voice(voice_file)
         # Piper's length_scale is the inverse of speed (0.9 = ~10% faster)
@@ -118,19 +121,21 @@ class TTSEngine:
         self.is_playing = True
 
         for sent in sentences:
-            if self._stop_requested.is_set():
+            if self._stop_requested.is_set() or (context and context.cancelled.is_set()):
                 break
 
             try:
                 # Synthesize sentence
                 for chunk in voice.synthesize(sent, syn_config=syn_cfg):
-                    if self._stop_requested.is_set():
+                    if self._stop_requested.is_set() or (context and context.cancelled.is_set()):
                         break
 
                     audio_arr = chunk.audio_float_array
                     sample_rate = chunk.sample_rate
 
                     # Play chunk
+                    if context:
+                        context.first_audio()
                     sd.play(audio_arr, samplerate=sample_rate)
                     sd.wait()
 

@@ -16,7 +16,7 @@ class ClaudeAdapter(BaseAdapter):
         super().__init__(name="Claude Code", target_id="claude", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "claude") or "claude"
 
-    def execute(self, prompt: str, cwd: Optional[str] = None) -> str:
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         if not prompt or not prompt.strip():
             return "Yes, how can I help you?"
 
@@ -29,7 +29,7 @@ class ClaudeAdapter(BaseAdapter):
             cmd += ["--resume", self.session_id]
         cmd.append(prompt)
 
-        raw = self.run_subprocess(cmd, cwd=cwd)
+        raw = self.run_subprocess(cmd, cwd=cwd, context=context)
         text, session = self.parse_json_reply(raw, ("result",), ("session_id",))
         if session:
             self.session_id = session

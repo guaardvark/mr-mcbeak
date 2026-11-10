@@ -1,116 +1,106 @@
-"""
-Tmux Multi-Agent Cockpit Bridge.
-Manages a multi-pane Tmux session where all 5 AI assistants run interactively.
-Supports injecting voice prompts into running panes and capturing output.
-"""
+"""Tmux cockpit with checked launches and stable pane identifiers."""
+import os
+import shlex
 import shutil
 import subprocess
-import logging
-import time
-from typing import Optional, Dict
-
-logger = logging.getLogger(__name__)
 
 
 class TmuxBridge:
-    """
-    Orchestrates interactive multi-agent terminal sessions via Tmux.
-    """
-
-    SESSION_NAME = "jarvis"
-
-    # Pane mapping within the session window
-    PANE_MAP = {
-        "claude": 0,
-        "grok": 1,
-        "antigravity": 2,
-        "agy": 2,
-        "cursor": 3,
-        "guaardvark": 4,
-    }
-
-    def __init__(self, session_name: str = "jarvis"):
+    def __init__(self, session_name="jarvis"):
         self.session_name = session_name
         self.tmux_bin = shutil.which("tmux")
+        self.panes = {}
+        self.launches = {}
+        self.active_pane = None
 
     @property
-    def is_available(self) -> bool:
+    def is_available(self):
         return self.tmux_bin is not None
 
-    def session_exists(self) -> bool:
+    def _run(self, *args):
+        return subprocess.run([self.tmux_bin, *args], capture_output=True, text=True,
+                              check=True, timeout=10)
+
+    def session_exists(self):
         if not self.is_available:
             return False
-        res = subprocess.run([self.tmux_bin, "has-session", "-t", self.session_name], capture_output=True)
-        return res.returncode == 0
+        result = subprocess.run([self.tmux_bin, "has-session", "-t", self.session_name],
+                                capture_output=True, timeout=10)
+        return result.returncode == 0
 
-    def create_cockpit_session(self):
-        """
-        Create a 5-pane split terminal layout with interactive CLIs.
-        """
+    @staticmethod
+    def launch_command(adapter):
+        if adapter.readonly and not adapter.capabilities["readonly"]:
+            raise ValueError(f"{adapter.name} cannot enforce read-only permissions")
+        cmd = [adapter.cli_binary]
+        if adapter.model:
+            cmd += ["--model", adapter.model]
+        if adapter.readonly:
+            flags = {"claude": ["--permission-mode", "plan"],
+                     "cursor": ["--mode", "ask"],
+                     "antigravity": ["--mode", "plan"],
+                     "grok": ["--deny", "Write", "--deny", "Edit", "--deny", "Bash"]}
+            cmd += flags[adapter.target_id]
+        return shlex.join(cmd)
+
+    def create_cockpit_session(self, adapters):
         if not self.is_available:
-            logger.warning("tmux is not installed on system. Active terminal mode unavailable.")
-            return False
-
+            raise RuntimeError("tmux is not installed")
         if self.session_exists():
-            logger.info(f"Tmux session '{self.session_name}' already exists.")
-            return True
-
-        logger.info(f"Creating 5-pane Tmux multi-agent cockpit '{self.session_name}'...")
-
-        # 1. Create base session (Pane 0: Claude)
-        subprocess.run([self.tmux_bin, "new-session", "-d", "-s", self.session_name, "-n", "cockpit", "claude"])
-
-        # 2. Split vertically (Pane 1: Grok)
-        subprocess.run([self.tmux_bin, "split-window", "-h", "-t", f"{self.session_name}:0.0", "grok"])
-
-        # 3. Split horizontally left bottom (Pane 2: AGY)
-        subprocess.run([self.tmux_bin, "split-window", "-v", "-t", f"{self.session_name}:0.0", "agy"])
-
-        # 4. Split horizontally right bottom (Pane 3: Cursor)
-        subprocess.run([self.tmux_bin, "split-window", "-v", "-t", f"{self.session_name}:0.1", "agent"])
-
-        # 5. Split bottom (Pane 4: Guaardvark)
-        subprocess.run([self.tmux_bin, "split-window", "-v", "-t", f"{self.session_name}:0.2", "guaardvark"])
-
-        # Select layout tiled for balanced view
-        subprocess.run([self.tmux_bin, "select-layout", "-t", f"{self.session_name}:0", "tiled"])
-
-        logger.info("Tmux multi-agent cockpit created successfully!")
+            raise RuntimeError("Refusing existing tmux session: launch permissions cannot be verified. Use a new session name or close it yourself.")
+        # Validate every launch before creating any panes. Unsupported read-only
+        # adapters remain available as explicit errors through headless dispatch.
+        launches = []
+        for adapter in dict.fromkeys(adapters.values()):
+            if adapter.readonly and not adapter.capabilities["readonly"]:
+                continue
+            launches.append((adapter, self.launch_command(adapter)))
+        if not launches:
+            raise RuntimeError("No adapters can be launched with configured permissions")
+        for index, (adapter, command) in enumerate(launches):
+            cwd = adapter.workspace or os.getcwd()
+            if index == 0:
+                result = self._run("new-session", "-d", "-s", self.session_name,
+                                   "-n", "cockpit", "-P", "-F", "#{pane_id}", "-c", cwd, command)
+            else:
+                result = self._run("split-window", "-t", self.session_name + ":0", "-P",
+                                   "-F", "#{pane_id}", "-c", cwd, command)
+            pane = result.stdout.strip()
+            self.launches[pane] = (cwd, command)
+            for key, value in adapters.items():
+                if value is adapter:
+                    self.panes[key] = pane
+            self._run("select-layout", "-t", self.session_name + ":0", "tiled")
         return True
 
-    def send_prompt(self, target_id: str, prompt: str) -> bool:
-        """
-        Inject keystrokes / text prompt directly into the assistant's active terminal pane.
-        """
-        if not self.is_available or not self.session_exists():
+    def send_prompt(self, target_id, prompt):
+        pane = self.panes.get(target_id)
+        if not pane:
+            return False
+        try:
+            self.active_pane = pane
+            self._run("send-keys", "-t", pane, "-l", "--", prompt)
+            self._run("send-keys", "-t", pane, "Enter")
+            return True
+        except (subprocess.SubprocessError, OSError):
             return False
 
-        pane_idx = self.PANE_MAP.get(target_id.lower(), 0)
-        target_spec = f"{self.session_name}:0.{pane_idx}"
+    def interrupt(self):
+        pane, self.active_pane = self.active_pane, None
+        if pane:
+            try:
+                self._run("send-keys", "-t", pane, "C-c")
+            except (subprocess.SubprocessError, OSError):
+                pass
 
-        logger.info(f"Injecting prompt to Tmux pane {target_spec}: '{prompt[:50]}...'")
+    def reset(self, target):
+        panes = set(self.panes.values()) if target == "team" else {self.panes.get(target)}
+        for pane in panes - {None}:
+            cwd, command = self.launches[pane]
+            self._run("respawn-pane", "-k", "-t", pane, "-c", cwd, command)
 
-        # Select pane & send keys
-        subprocess.run([self.tmux_bin, "select-pane", "-t", target_spec])
-        # Send text followed by Enter
-        subprocess.run([self.tmux_bin, "send-keys", "-t", target_spec, prompt, "C-m"])
-        return True
-
-    def capture_output(self, target_id: str, lines: int = 15) -> str:
-        """
-        Capture the last N lines of output from the target pane.
-        """
-        if not self.is_available or not self.session_exists():
+    def capture_output(self, target_id, lines=15):
+        pane = self.panes.get(target_id)
+        if not pane:
             return ""
-
-        pane_idx = self.PANE_MAP.get(target_id.lower(), 0)
-        target_spec = f"{self.session_name}:0.{pane_idx}"
-
-        res = subprocess.run(
-            [self.tmux_bin, "capture-pane", "-p", "-t", target_spec, "-S", f"-{lines}"],
-            capture_output=True,
-            text=True
-        )
-        if res.returncode == 0:
-            return res.stdout.strip()
-        return ""
+        return self._run("capture-pane", "-p", "-t", pane, "-S", str(-lines)).stdout.strip()
