@@ -133,7 +133,9 @@ def extract_speakable_text(raw_text: str, max_sentences: int = 3) -> str:
     if len(sentences) > max_sentences:
         sentences = sentences[:max_sentences]
     tts_text = " ".join(sentences).strip()
-    if not tts_text or len(tts_text) < 5:
+    # Short answers ("4.", "Yes.", "No.") are answers; only text with nothing
+    # speakable in it becomes "Done."
+    if not re.search(r"[A-Za-z0-9]", tts_text):
         return "Done."
     return tts_text
 
