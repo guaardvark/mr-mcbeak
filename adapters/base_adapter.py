@@ -20,6 +20,8 @@ import os
 import signal
 import time
 
+from core.privacy import child_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,7 +71,7 @@ class BaseAdapter(ABC):
                 return ""
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     text=True, cwd=working_dir, stdin=subprocess.DEVNULL,
-                                    start_new_session=True)
+                                    start_new_session=True, env=child_env())
             deadline = time.monotonic() + timeout
             while True:
                 cancelled = context and context.cancelled.is_set()

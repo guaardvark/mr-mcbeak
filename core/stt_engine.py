@@ -2,6 +2,7 @@
 Faster-Whisper Speech-to-Text (STT) Engine.
 Matches Guaardvark voice handling: 16 kHz float32, peak-normalize, VAD, anti-hallucination.
 """
+import os
 import re
 import time
 import logging
@@ -12,10 +13,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from faster_whisper import WhisperModel
+    from faster_whisper.utils import download_model
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
     WhisperModel = None
+    download_model = None
 
 # tiny.en / Whisper classic garbage on silence, TTS echo, and un-normalized clips
 _HALLUCINATIONS = {
@@ -99,6 +102,20 @@ class STTEngine:
         self.vad_filter = vad_filter
         self.model: Optional[WhisperModel] = None
 
+    def _local_model_path(self) -> str:
+        """Path of the model on disk, downloading it only if it was never fetched.
+
+        Passing a size name straight to WhisperModel asks Hugging Face for the
+        latest revision on every start; the cached copy needs no network.
+        """
+        if os.path.isdir(self.model_size):
+            return self.model_size
+        try:
+            return download_model(self.model_size, local_files_only=True)
+        except Exception:
+            logger.info(f"Whisper model '{self.model_size}' is not on disk yet; downloading it once from Hugging Face")
+            return download_model(self.model_size)
+
     def load_model(self):
         """Pre-warm and cache the Whisper model in memory."""
         if not FASTER_WHISPER_AVAILABLE:
@@ -111,16 +128,17 @@ class STTEngine:
 
         logger.info(f"Loading faster-whisper model '{self.model_size}' (device={self.device}, compute={self.compute_type})...")
         t0 = time.time()
+        model_path = self._local_model_path()
         try:
             self.model = WhisperModel(
-                self.model_size,
+                model_path,
                 device=self.device,
                 compute_type=self.compute_type
             )
         except Exception as e:
             logger.warning(f"Failed with compute_type={self.compute_type} ({e}), falling back to int8/cpu")
             self.model = WhisperModel(
-                self.model_size,
+                model_path,
                 device="cpu",
                 compute_type="int8"
             )

@@ -4,6 +4,8 @@ import shlex
 import shutil
 import subprocess
 
+from core.privacy import NO_TELEMETRY_ENV
+
 
 class TmuxBridge:
     def __init__(self, session_name="jarvis"):
@@ -32,7 +34,9 @@ class TmuxBridge:
     def launch_command(adapter):
         if adapter.readonly and not adapter.capabilities["readonly"]:
             raise ValueError(f"{adapter.name} cannot enforce read-only permissions")
-        cmd = [adapter.cli_binary]
+        # Panes inherit the tmux server's environment, not Jarvis's, so the
+        # telemetry opt-outs ride on the command itself
+        cmd = ["env", *(f"{k}={v}" for k, v in NO_TELEMETRY_ENV.items()), adapter.cli_binary]
         if adapter.model:
             cmd += ["--model", adapter.model]
         if adapter.readonly:

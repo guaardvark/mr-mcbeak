@@ -13,13 +13,14 @@ import argparse
 import faulthandler
 from pathlib import Path
 
-# Piper and faster-whisper's VAD run ONNX Runtime, which queues Microsoft usage
-# telemetry unless this is set before it loads. No data leaves this machine.
-os.environ["ORT_DISABLE_TELEMETRY"] = "1"
-
 # Add project root to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Telemetry off before anything loads ONNX Runtime or huggingface_hub or starts
+# an assistant CLI (see core/privacy.py)
+from core.privacy import disable_telemetry
+disable_telemetry()
 
 from core.text_sanitizer import clean_text_for_tts, extract_speakable_text
 from core.wake_word_matcher import MultiTargetWakeWordMatcher

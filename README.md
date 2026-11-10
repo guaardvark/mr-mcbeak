@@ -36,6 +36,19 @@ Cursor ask mode, Grok with write, edit and shell tools denied). Set
 `permissions: full` on an assistant in `config.yaml` to let voice commands edit
 files or run commands. Remember the microphone hears everyone in the room.
 
+## Telemetry
+
+Speech recognition (faster-whisper) and the voices (Piper) run on this machine.
+What leaves it is what you say to the assistant you name, sent by that
+assistant's own CLI. Everything else is switched off in `core/privacy.py`, which
+Jarvis applies to itself before any library loads and to every CLI it starts:
+ONNX Runtime usage events, Hugging Face pings (the Whisper model is read from
+the local cache; the network is used once, to download it on first run), and
+the CLIs' own usage metrics, crash reports, Grok's analytics and session-trace
+upload, and Claude Code's update checks. Antigravity's usage telemetry is an
+account setting, and Cursor's is governed by its Privacy Mode; neither has a
+switch Jarvis can set.
+
 ## Config
 
 `config.yaml` holds the wake words, voices and the per-assistant keys
