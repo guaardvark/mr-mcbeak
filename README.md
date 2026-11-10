@@ -35,6 +35,12 @@ includes what was heard and stays on this machine.
   in their own voices. Parallel replies share prior context; sequential replies
   also see earlier answers from the current round.
 - For 30 seconds after a reply you can keep talking without a wake word.
+- When you stop talking, a small local model (Smart Turn v3.2, CPU, about 20 ms)
+  judges from how your last words sounded whether you finished. A finished
+  question goes out half a second after your last word; when you sound
+  mid-thought it waits up to three seconds (`audio.turn_*`, `max_silence_ms`).
+  On pipecat's real-speech English test clips it caught 96% of finished turns
+  and called 4.6% of unfinished ones finished.
 - Anything you add while an assistant is still working on your question joins
   that question, so it answers both together instead of losing the first. The
   same goes for a pause mid-sentence: carry on within a few seconds

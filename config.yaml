@@ -14,7 +14,13 @@ audio:
   sample_rate: 16000
   channels: 1
   silence_threshold: 0.015         # Energy threshold for speech detection
-  silence_duration_ms: 1800        # Silence that ends an utterance; long enough for a mid-sentence pause
+  silence_duration_ms: 1800        # Silence that ends an utterance when the end-of-turn model is off or missing
+  turn_detection: true             # Smart Turn v3.2 (local, CPU) decides from how a pause sounds whether you finished
+  turn_check_ms: 500               # Pause after which the model is asked
+  turn_threshold: 0.7              # How sure it must be that you finished. Real English speech (pipecat's
+                                   # test set, 538 clips), asked 0.5 s after the last word: 0.7 caught 96.0%
+                                   # of finished turns and cut 4.6% of unfinished ones; 0.5 caught 96.8%, cut 8.0%
+  max_silence_ms: 3000             # Longest wait when you sound mid-thought
   min_speech_duration_ms: 400      # Minimum speech duration to discard noise
   max_utterance_seconds: 30        # Maximum recording duration before auto-segmenting
   max_queue_age_seconds: 8         # Speech heard while an assistant was busy is dropped after this
@@ -113,7 +119,7 @@ assistants:
       - "anti-gravity"
       - "a.g.y."
     voice: "en_US-ryan-high.onnx"
-    voice_speaker: 12
+    voice_speaker: 0
     prompt_prefix: ""
     description: "Google DeepMind Agentic CLI with skills & subagents"
 

@@ -56,6 +56,17 @@ def doctor(config):
         sd.check_output_settings()
         return f"{len(devices)} devices; default input supports 16 kHz"
     check("audio devices", audio)
+
+    def turn_model():
+        from core import turn_detector
+        if not config.get("audio", {}).get("turn_detection", True):
+            return "off (audio.turn_detection); pauses are timed only"
+        path = turn_detector.model_path(Path(__file__).resolve().parent.parent / "models" / "smart-turn")
+        if not path.exists():
+            raise ValueError(f"missing {path}; run ./setup.sh")
+        turn_detector.TurnDetector(path)
+        return path.name
+    check("end-of-turn model", turn_model)
     tts_cfg = config.get("tts", {})
     tts = TTSEngine(models_dir=tts_cfg.get("models_dir", "models/piper"),
                     extra_model_dirs=tts_cfg.get("extra_model_dirs", []))

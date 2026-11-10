@@ -63,11 +63,25 @@ if [ ! -f "$MODELS_PIPER/en_US-libritts-high.onnx" ]; then
     fi
 fi
 
-# 3. Create Symlink in ~/.local/bin
+# 3. End-of-turn model (Smart Turn v3.2, pipecat-ai, BSD-2-Clause, 8.7 MB, runs on the CPU)
+echo "⏱️  Checking the end-of-turn model..."
+MCBEAK_DIR="$SCRIPT_DIR" "$VENV_DIR/bin/python" - <<'PY'
+import os, sys
+root = os.environ["MCBEAK_DIR"]
+sys.path.insert(0, root)
+from core.privacy import disable_telemetry
+disable_telemetry()
+from core import turn_detector
+folder = os.path.join(root, "models", "smart-turn")
+path = turn_detector.model_path(folder)
+print(f"   • {'present' if path.exists() else 'downloaded'}: {path if path.exists() else turn_detector.download_model(folder)}")
+PY
+
+# 4. Create Symlink in ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/mcbeak"
 
-# 4. Verify AI Assistant CLIs
+# 5. Verify AI Assistant CLIs
 echo "🤖 Verifying AI Assistant CLIs..."
 for cli in claude grok agy agent guaardvark; do
     if command -v "$cli" >/dev/null 2>&1; then
@@ -77,7 +91,7 @@ for cli in claude grok agy agent guaardvark; do
     fi
 done
 
-# 5. Run Verification Unit Tests
+# 6. Run Verification Unit Tests
 echo "🧪 Running unit tests..."
 "$VENV_DIR/bin/python" -m unittest discover "$SCRIPT_DIR/tests"
 

@@ -304,6 +304,13 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             logger.error(f"Error handling voice utterance: {err}", exc_info=True)
 
     # 3. Start Continuous Recording
+    turn_detector = None
+    if audio_cfg.get("turn_detection", True):
+        from core import turn_detector as td
+        try:
+            turn_detector = td.load(PROJECT_ROOT / "models" / "smart-turn")
+        except Exception as err:
+            logger.error(f"End-of-turn model failed to load ({err}); using silence timing only")
     recorder = AudioRecorder(
         sample_rate=audio_cfg.get("sample_rate", 16000),
         channels=audio_cfg.get("channels", 1),
@@ -316,7 +323,11 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         on_utterance_ready=on_utterance,
         on_barge_in=conversation.cancel,
         tts_engine=tts,
-        barge_in_enabled=audio_cfg.get("barge_in_enabled", True)
+        barge_in_enabled=audio_cfg.get("barge_in_enabled", True),
+        turn_detector=turn_detector,
+        turn_check_ms=int(audio_cfg.get("turn_check_ms", 500)),
+        turn_threshold=float(audio_cfg.get("turn_threshold", 0.7)),
+        max_silence_ms=int(audio_cfg.get("max_silence_ms", 3000)),
     )
 
     recorder.start()

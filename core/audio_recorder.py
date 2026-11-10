@@ -33,7 +33,11 @@ class AudioRecorder:
         on_utterance_ready: Optional[Callable[[np.ndarray], None]] = None,
         tts_engine: Optional[Any] = None,
         on_barge_in: Optional[Callable] = None,
-        barge_in_enabled: bool = True
+        barge_in_enabled: bool = True,
+        turn_detector: Optional[Any] = None,
+        turn_check_ms: int = 500,
+        turn_threshold: float = 0.7,
+        max_silence_ms: int = 3000,
     ):
         if sample_rate != 16000:
             raise ValueError("Audio capture requires sample_rate: 16000; resampling is not supported.")
@@ -59,6 +63,17 @@ class AudioRecorder:
         self.max_queue_age_seconds = max_queue_age_seconds
         self.on_utterance_ready = on_utterance_ready
         self.tts_engine = tts_engine
+        # With an end-of-turn model, a pause of turn_check_ms is put to it: a
+        # finished thought ends the utterance there, an unfinished one waits up
+        # to max_silence_ms. Without one, silence_duration_ms decides alone.
+        self.turn_detector = turn_detector
+        self.turn_check_ms = turn_check_ms
+        self.turn_threshold = turn_threshold
+        self.max_silence_ms = max_silence_ms
+        self._turn_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._turn_checker: Optional[threading.Thread] = None
+        self._turn_asked_for = None    # pause (its last-speech time) already put to the model
+        self._turn_verdict = (None, 0.0)  # (pause, probability finished), written by the checker
 
         self._running = False
         self._stream: Optional[sd.InputStream] = None
@@ -152,6 +167,8 @@ class AudioRecorder:
                 speech_duration >= self.min_speech_duration_ms and
                 silence_duration >= self.silence_duration_ms
             )
+            if self.turn_detector is not None and speech_duration >= self.min_speech_duration_ms:
+                pause_detected = self._turn_over(silence_duration)
 
             # Condition 2: Max duration limit reached
             max_limit_reached = (speech_duration / 1000.0) >= self.max_utterance_seconds
@@ -159,6 +176,44 @@ class AudioRecorder:
             if pause_detected or max_limit_reached:
                 logger.debug(f"Utterance complete (duration={speech_duration:.0f}ms, pause={silence_duration:.0f}ms).")
                 self._emit_utterance()
+
+    def _turn_over(self, silence_ms: float) -> bool:
+        """End of turn by the model's verdict on this pause, or the long-silence fallback."""
+        pause = self._last_speech_time
+        if silence_ms >= self.max_silence_ms:
+            verdict = self._turn_verdict
+            p = f", p={verdict[1]:.2f}" if verdict[0] == pause else ""
+            logger.info(f"End of turn after a {silence_ms / 1000:.1f}s pause (sounded unfinished{p})")
+            return True
+        if silence_ms < self.turn_check_ms:
+            return False
+        if self._turn_asked_for != pause:
+            self._turn_asked_for = pause
+            item = (pause, np.concatenate(self._audio_buffer))
+            try:
+                self._turn_queue.get_nowait()  # an older pause no longer matters
+            except queue.Empty:
+                pass
+            self._turn_queue.put_nowait(item)
+            return False
+        verdict_pause, p = self._turn_verdict
+        if verdict_pause == pause and p >= self.turn_threshold:
+            logger.info(f"End of turn after a {silence_ms / 1000:.1f}s pause (sounded finished, p={p:.2f})")
+            return True
+        return False
+
+    def _turn_check_loop(self):
+        """Runs the end-of-turn model off the audio callback thread."""
+        while self._running:
+            try:
+                pause, audio = self._turn_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                self._turn_verdict = (pause, self.turn_detector.probability(audio))
+            except Exception as e:
+                logger.error(f"End-of-turn check failed: {e}")
+                self._turn_verdict = (pause, 0.0)
 
     def _emit_utterance(self):
         """Assemble accumulated audio chunks and dispatch to callback."""
@@ -210,16 +265,22 @@ class AudioRecorder:
                 if self.tts_engine:
                     self.tts_engine.stop()
 
-    def start(self):
-        """Start capturing microphone input."""
-        if self._running:
-            return
-
+    def _start_workers(self):
         self._running = True
         self._interrupt_worker = threading.Thread(target=self._interrupt_loop, daemon=True)
         self._interrupt_worker.start()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="utterance")
         self._worker.start()
+        if self.turn_detector is not None:
+            self._turn_checker = threading.Thread(target=self._turn_check_loop, daemon=True, name="turn-check")
+            self._turn_checker.start()
+
+    def start(self):
+        """Start capturing microphone input."""
+        if self._running:
+            return
+
+        self._start_workers()
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=self.channels,
