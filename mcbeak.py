@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Jarvis Multi-Agent Voice Cockpit ("Tony Stark Edition").
-Hands-free voice chat interface for Claude, Grok, Antigravity, Cursor, and Guaardvark.
+Voice cockpit: hands-free spoken conversations with Claude Code, Grok,
+Antigravity, Cursor and Guaardvark, one at a time or all together.
 """
 import os
 import sys
@@ -11,6 +11,7 @@ import signal
 import logging
 import argparse
 import faulthandler
+import re
 from pathlib import Path
 
 # Add project root to sys.path
@@ -39,7 +40,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S"
 )
-logger = logging.getLogger("jarvis")
+logger = logging.getLogger("cockpit")
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -50,29 +51,56 @@ def load_config(config_path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def print_banner(assistants: dict):
-    banner = f"""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║              🎙️   JARVIS MULTI-AGENT VOICE COCKPIT                           ║
-║                       (Tony Stark Edition)                                   ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║  🟢 Status: LIVE & LISTENING                                                 ║
-║  🗣️  Registered Assistants & Wake Words:                                     ║"""
-    print(banner)
-    for k, a in assistants.items():
-        name = a.get("name", k)
-        wake = a.get("wake_words", [k])[0]
-        voice = a.get("voice", "en_US-ryan-high.onnx")
-        print(f"║     • '{wake:<18}' ➔  {name:<16} (Voice: {voice[:15]})")
-    print(f"║     • 'Hey Jarvis'        ➔  Default / last assistant                ║")
-    print(f"║     • 'Hey Team'          ➔  Everyone answers (group conversation)    ║")
-    print(f"║                                                                              ║")
-    print(f"║  ⚡ Features:                                                                 ║")
-    print(f"║     • Follow-up window: keep talking without repeating the wake-word       ║")
-    print(f"║     • Each assistant remembers its conversation (CLI sessions resume)      ║")
-    print(f"║     • Barge-in: speak over the assistant to stop it (headphones advised)   ║")
-    print(f"║     • Read-only by default; set permissions: full per assistant to allow edits ║")
-    print(f"╚══════════════════════════════════════════════════════════════════════════════╝\n")
+def app_name(config: dict) -> str:
+    return str((config.get("system") or {}).get("name") or "Voice Cockpit")
+
+
+def bare_name(phrase: str) -> str:
+    """'hey grok' -> 'Grok'."""
+    words = phrase.strip().split()
+    while len(words) > 1 and words[0].lower() in ("hey", "ok", "okay", "hi", "hello", "yo"):
+        words = words[1:]
+    return " ".join(w.capitalize() for w in words)
+
+
+def hint_words(config: dict) -> str:
+    """Names Whisper should expect: the coordinator name and each assistant's first wake word."""
+    stt_cfg = config.get("stt") or {}
+    if stt_cfg.get("hint_words"):
+        return str(stt_cfg["hint_words"])
+    names = [app_name(config)] if config.get("coordinator_wake_words") else []
+    for key, a in (config.get("assistants") or {}).items():
+        names += [bare_name(w) for w in (a.get("wake_words") or [key])[:1]]
+    return ", ".join(dict.fromkeys(n for n in names if n))
+
+
+def print_banner(config: dict, adapters: dict, default_assistant: str):
+    """Who answers to what, in which voice and with which permissions."""
+    rows = []
+    for key, a in (config.get("assistants") or {}).items():
+        adapter = adapters.get(a.get("target_id", key)) or adapters.get(key)
+        if adapter is None:
+            continue
+        voice = str(a.get("voice", "")).replace("en_US-", "").replace(".onnx", "")
+        if a.get("voice_speaker"):
+            voice += f" #{a['voice_speaker']}"
+        if adapter.readonly and not adapter.capabilities["readonly"]:
+            mode = "off (cannot be read-only)"
+        else:
+            mode = "read-only" if adapter.readonly else "full"
+        rows.append((f'"{bare_name((a.get("wake_words") or [key])[0])} ..."', adapter.name, voice, mode))
+    coordinator = app_name(config) if config.get("coordinator_wake_words") else ""
+    default_name = adapters[default_assistant].name if default_assistant in adapters else default_assistant
+    width = max(len(r[0]) for r in rows) + 3 if rows else 20
+    print(f"\n  {app_name(config)}  ·  listening\n")
+    print(f"  {'Say':<{width}}{'Goes to':<16}{'Voice':<22}Permissions")
+    for say, name, voice, mode in rows:
+        print(f"  {say:<{width}}{name:<16}{voice:<22}{mode}")
+    if coordinator:
+        print(f'  {chr(34) + coordinator + " ..." + chr(34):<{width}}the last assistant you used (first: {default_name})')
+    print(f'  {chr(34) + "Hey team ..." + chr(34):<{width}}everyone, in turn')
+    print("\n  Keep talking for 30 s without a name. Talk over a reply to stop it.")
+    print('  Say "stop", "go to sleep", "new conversation" or "repeat that".\n')
 
 
 def run_voice_daemon(config: dict, use_tmux: bool = False):
@@ -85,13 +113,12 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
     from core.diagnostics import validate_config
     validate_config(config)
-    print_banner(assistants_cfg)
     logging.getLogger().setLevel(
         getattr(logging, str(system_cfg.get("log_level", "INFO")).upper(), logging.INFO)
     )
 
     # 1. Initialize Core Engines
-    logger.info("Initializing Jarvis AI Engines...")
+    logger.info(f"Starting {app_name(config)}...")
     state_mgr = StateManager(
         active_timeout_seconds=system_cfg.get("active_timeout_seconds", 30.0),
         default_assistant=system_cfg.get("default_assistant", "claude")
@@ -99,8 +126,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     council_cfg = config.get("council", {}) or {}
     matcher = MultiTargetWakeWordMatcher(
         config_assistants=assistants_cfg,
-        coordinator_wake_words=config.get("coordinator_wake_words", ["jarvis", "hey jarvis"]),
+        coordinator_wake_words=config.get("coordinator_wake_words") or [],
         council_wake_words=council_cfg.get("wake_words", ["team", "hey team", "everyone", "hey everyone"]),
+        coordinator_variants=config.get("coordinator_variants") or [],
     )
     display_names = {k: a.get("name", k.title()) for k, a in assistants_cfg.items()}
     for k, a in assistants_cfg.items():
@@ -110,7 +138,8 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         device=stt_cfg.get("device", "auto"),
         compute_type=stt_cfg.get("compute_type", "int8"),
         beam_size=stt_cfg.get("beam_size", 5),
-        vad_filter=stt_cfg.get("vad_filter", True)
+        vad_filter=stt_cfg.get("vad_filter", True),
+        hint_words=hint_words(config),
     )
     stt.load_model()
 
@@ -121,7 +150,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     )
     dispatcher = AdapterDispatcher(config_assistants=assistants_cfg)
     conversation = Conversation(state_mgr, tts, dispatcher)
-    tmux = TmuxBridge()
+    # tmux treats "." and ":" as target separators, so the session name is letters, digits and dashes
+    tmux = TmuxBridge(session_name=re.sub(r"[^a-z0-9]+", "-", app_name(config).lower()).strip("-") or "voice-cockpit")
+    print_banner(config, dispatcher.adapters, system_cfg.get("default_assistant", "claude"))
     council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
     shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
 
@@ -140,7 +171,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             tmux.create_cockpit_session(dispatcher.adapters)
             conversation.on_cancel = tmux.interrupt
             conversation.on_reset = tmux.reset
-            print("\n💻 Tmux Cockpit session created. Attach with: tmux attach -t jarvis\n")
+            print(f"\n💻 Tmux Cockpit session created. Attach with: tmux attach -t {tmux.session_name}\n")
         else:
             logger.warning("tmux not available, running in headless mode.")
             use_tmux = False
@@ -182,7 +213,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             if not prompt:
                 conversation.cancel()
                 # Name-only wake: chime + listen. A spoken ack ate the follow-up
-                # ("Hey Jarvis" → TTS → user's command discarded as self-echo).
+                # ("Hey <name>" → TTS → user's command discarded as self-echo).
                 print(f"\n[{target.upper()}]: Listening...\n")
                 logger.info(f"{target} listening (30s follow-up window, no spoken ack)")
                 return
@@ -246,7 +277,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
     # Handle Ctrl+C cleanly
     def sig_handler(sig, frame):
-        print("\nShutting down Jarvis Voice Cockpit...")
+        print(f"\nShutting down {app_name(config)}...")
         conversation.close()
         recorder.stop()
         tts.stop()
@@ -294,7 +325,7 @@ def test_voices(config: dict):
 def main():
     # A native crash (PortAudio, CTranslate2, onnxruntime) prints every thread's Python stack
     faulthandler.enable()
-    parser = argparse.ArgumentParser(description="Jarvis Multi-Agent Voice Cockpit")
+    parser = argparse.ArgumentParser(description="Voice cockpit for AI coding assistants")
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
     parser.add_argument("--listen", action="store_true", help="Start continuous voice listener daemon")
     parser.add_argument("--tmux", action="store_true", help="Launch 5-pane Tmux Cockpit and voice daemon")

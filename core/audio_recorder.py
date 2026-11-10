@@ -204,7 +204,7 @@ class AudioRecorder:
         self._running = True
         self._interrupt_worker = threading.Thread(target=self._interrupt_loop, daemon=True)
         self._interrupt_worker.start()
-        self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="jarvis-utterance")
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="utterance")
         self._worker.start()
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,

@@ -1,9 +1,9 @@
-# Jarvis Multi-Agent Voice Cockpit Configuration
+# Mr. McBeak configuration
 
 system:
-  name: "Jarvis"
+  name: "Mr. McBeak"                # Shown in the banner and given to Whisper as a hint word
   active_timeout_seconds: 30       # Follow-up window without needing wake-word
-  default_assistant: "claude"     # Default assistant if generic wake-word ("Hey Jarvis") is used
+  default_assistant: "claude"     # Who "Mr. McBeak ..." goes to before any assistant has been used
   log_level: "INFO"
   sound_cues: true                 # Play chimes on wake-word and turn completion
   shared_transcript_turns: 6       # How many recent turns of the others each assistant is shown
@@ -31,7 +31,7 @@ stt:
 
 tts:
   engine: "piper"                  # piper
-  models_dir: "models/piper"       # relative to jarvis_voice or absolute path
+  models_dir: "models/piper"       # relative to this folder, or absolute
   extra_model_dirs: []             # e.g. ["~/guaardvark/backend/tools/voice/piper-models"]
   playback_speed: 1.05             # Slight speed boost for snappy conversations
   sentence_streaming: true         # Synthesize and play sentence-by-sentence
@@ -41,7 +41,7 @@ tts:
 # Per assistant, optional keys:
 #   permissions: readonly | full   readonly (default) = the CLI may read and answer, not edit or run
 #   model:       CLI model override (Claude: e.g. claude-haiku-5-5 for cheaper, faster spoken turns)
-#   workspace:   directory the CLI runs in (default: where jarvis was launched)
+#   workspace:   directory the CLI runs in (default: where Mr. McBeak was launched)
 #   timeout_seconds: per-turn limit (default 120)
 assistants:
   claude:
@@ -156,11 +156,23 @@ assistants:
     prompt_prefix: ""
     description: "Local Guaardvark autonomous AI operating system"
 
-# Generic Coordinator Wake Words (route to the last or default assistant)
+# The app's own name: routes to the last assistant used, or default_assistant.
+# Lead with "Mr." or "Mister": on its own "McBeak" was heard right less often
+# (15 of 18 synthetic test clips against 18 of 18).
 coordinator_wake_words:
-  - "jarvis"
-  - "hey jarvis"
-  - "ok jarvis"
+  - "mr mcbeak"
+  - "mister mcbeak"
+  - "hey mr mcbeak"
+  - "hey mister mcbeak"
+  - "ok mr mcbeak"
+# What Whisper wrote for it without hint words, plus the bare surname
+coordinator_variants:
+  - "mcbeak"
+  - "mr mcbeek"
+  - "mister mcbeek"
+  - "mr mcgeek"
+  - "mr mcveeke"
+  - "mr mc beak"
 
 # Group conversation: everyone answers, each in their own voice, and each sees
 # what the others said. Follow-ups within the window keep going to the team.

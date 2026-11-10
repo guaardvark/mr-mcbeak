@@ -48,7 +48,7 @@ def doctor(config):
     import sounddevice as sd
     if not FASTER_WHISPER_AVAILABLE:
         failures.append("faster-whisper")
-        print("FAIL faster-whisper: install requirements in the Jarvis virtualenv")
+        print("FAIL faster-whisper: run ./setup.sh to install requirements")
 
     def audio():
         devices = sd.query_devices()

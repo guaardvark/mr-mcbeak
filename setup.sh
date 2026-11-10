@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Jarvis Multi-Agent Voice Cockpit Setup Script
+# Mr. McBeak setup
 # Installs dependencies, sets up dedicated venv, ensures voice models,
 # and verifies CLI assistants.
 # ==============================================================================
@@ -15,7 +15,7 @@ MODELS_WHISPER="$SCRIPT_DIR/models/whisper"
 GUAARDVARK_PIPER_DIR="${GUAARDVARK_PIPER_DIR:-${GUAARDVARK_DIR:-$HOME/guaardvark}/backend/tools/voice/piper-models}"
 
 echo "=========================================================================="
-echo "🎙️  Setting up Jarvis Multi-Agent Voice Cockpit (Tony Stark Edition)..."
+echo "🎙️  Setting up Mr. McBeak..."
 echo "=========================================================================="
 
 mkdir -p "$MODELS_PIPER" "$MODELS_WHISPER"
@@ -65,7 +65,7 @@ fi
 
 # 3. Create Symlink in ~/.local/bin
 mkdir -p "$HOME/.local/bin"
-ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/jarvis"
+ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/mcbeak"
 
 # 4. Verify AI Assistant CLIs
 echo "🤖 Verifying AI Assistant CLIs..."
@@ -82,9 +82,9 @@ echo "🧪 Running unit tests..."
 "$VENV_DIR/bin/python" -m unittest discover "$SCRIPT_DIR/tests"
 
 echo "=========================================================================="
-echo "✨ Jarvis Voice Cockpit setup complete!"
+echo "✨ Mr. McBeak is set up."
 echo "🚀 Start with:"
-echo "   jarvis --listen      # Continuous background voice listener"
-echo "   jarvis --tmux        # Split-screen 5-pane interactive cockpit"
-echo "   jarvis --test-voice  # Test audio voices for all 5 assistants"
+echo "   mcbeak --listen      # Continuous background voice listener"
+echo "   mcbeak --tmux        # Split-screen 5-pane interactive cockpit"
+echo "   mcbeak --test-voice  # Test audio voices for all 5 assistants"
 echo "=========================================================================="

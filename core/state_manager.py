@@ -1,5 +1,5 @@
 """
-State Machine & Session Manager for Jarvis Voice Cockpit.
+State machine and session manager for the voice cockpit.
 Manages Passive vs Active listening modes, active assistant routing, and follow-up timeouts.
 """
 import time
@@ -34,8 +34,8 @@ class StateManager:
         now = time.monotonic()
 
         if detected_target:
-            # Explicit target (e.g. "Hey Grok", "Hey Claude", "Jarvis")
-            if detected_target == "jarvis":
+            # Explicit target (e.g. "Hey Grok", "Hey Claude", or the coordinator name)
+            if detected_target == "coordinator":
                 # Coordinator wake-word -> routes to active assistant or default
                 target = self.active_assistant or self.default_assistant
                 if target == "team":

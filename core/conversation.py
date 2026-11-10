@@ -13,7 +13,7 @@ class Conversation:
         self.future = None
         self.last_reply = None
         self.lock = threading.RLock()
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jarvis-turn")
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="turn")
 
     def cancel(self):
         with self.lock:

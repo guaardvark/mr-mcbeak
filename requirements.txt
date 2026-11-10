@@ -1,4 +1,4 @@
-# Jarvis Multi-Agent Voice Cockpit Dependencies
+# Voice cockpit dependencies
 faster-whisper>=1.0.0
 piper-tts>=1.2.0
 sounddevice>=0.4.6

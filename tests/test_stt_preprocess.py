@@ -29,7 +29,7 @@ class TestSttPreprocess(unittest.TestCase):
         self.assertTrue(is_whisper_hallucination("You."))
         self.assertTrue(is_whisper_hallucination("Thank you."))
         self.assertTrue(is_whisper_hallucination("Thanks for watching!"))
-        self.assertFalse(is_whisper_hallucination("Hey Jarvis check git status"))
+        self.assertFalse(is_whisper_hallucination("Hey Mr. McBeak check git status"))
         self.assertFalse(is_whisper_hallucination("can you open the file"))
 
 

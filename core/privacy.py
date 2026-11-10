@@ -1,7 +1,7 @@
 """
-Telemetry off, for Jarvis and for every assistant CLI it starts.
+Telemetry off, for the cockpit and for every assistant CLI it starts.
 
-The only thing Jarvis sends off the machine is what the user says to the
+The only thing the cockpit sends off the machine is what the user says to the
 assistant they named, through that assistant's own CLI. Usage metrics, crash
 reports, trace uploads and update pings are switched off with each tool's own
 documented opt-out. Values are forced, not defaulted, so an inherited

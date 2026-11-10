@@ -41,7 +41,7 @@ class GuaardvarkAdapter(BaseAdapter):
         try:
             resp = requests.post(
                 self.api_url,
-                json={"message": prompt, "session_id": self.session_id or "jarvis_voice", "use_rag": self.use_rag},
+                json={"message": prompt, "session_id": self.session_id or "voice_cockpit", "use_rag": self.use_rag},
                 timeout=self.timeout,
             )
             if context and context.cancelled.is_set():

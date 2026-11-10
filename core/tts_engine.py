@@ -59,7 +59,7 @@ class TTSEngine:
     def get_or_load_voice(self, model_filename: str) -> Any:
         """Load and cache a Piper voice model with automatic fallback search."""
         if not PIPER_AVAILABLE:
-            raise RuntimeError("piper-tts is not available. Please run in the Jarvis virtualenv.")
+            raise RuntimeError("piper-tts is not available. Run ./setup.sh to create the virtualenv.")
 
         with self.lock:
             if model_filename in self.loaded_voices:

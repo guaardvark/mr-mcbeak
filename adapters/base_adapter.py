@@ -5,7 +5,7 @@ Every adapter runs a CLI in print mode, asks for JSON, keeps the session id the
 CLI returns so the next turn resumes the same conversation, and honours three
 per-assistant config keys:
 
-    workspace:   directory the CLI runs in (default: where jarvis was launched)
+    workspace:   directory the CLI runs in (default: where the cockpit was launched)
     model:       model override passed to the CLI (default: the CLI's own)
     permissions: "readonly" (default) or "full". Read-only keeps a stray phrase
                  picked up by an always-on microphone from editing files or

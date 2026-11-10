@@ -38,7 +38,7 @@ class TestWakeWordMatcher(unittest.TestCase):
             }
         }
         self.matcher = MultiTargetWakeWordMatcher(
-            assistants, coordinator_wake_words=["jarvis", "hey jarvis"], council_wake_words=["team", "hey team"]
+            assistants, coordinator_wake_words=["mr mcbeak", "hey mr mcbeak"], council_wake_words=["team", "hey team"]
         )
 
     def test_exact_wake_word_extraction(self):
@@ -75,10 +75,10 @@ class TestWakeWordMatcher(unittest.TestCase):
         self.assertEqual(res.target, "guaardvark")
         self.assertEqual(res.remainder, "what is system health")
 
-    def test_coordinator_jarvis(self):
-        res = self.matcher.match("hey jarvis give me a system summary")
+    def test_coordinator(self):
+        res = self.matcher.match("Hey Mr. McBeak, give me a system summary")
         self.assertTrue(res.detected)
-        self.assertEqual(res.target, "jarvis")
+        self.assertEqual(res.target, "coordinator")
         self.assertEqual(res.remainder, "give me a system summary")
 
     def test_active_followup_routing(self):

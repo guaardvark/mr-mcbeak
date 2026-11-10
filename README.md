@@ -1,4 +1,4 @@
-# Jarvis Voice Cockpit
+# Mr. McBeak
 
 Hands-free voice front end for several AI coding assistants on one machine:
 Claude Code, Grok, Antigravity, Cursor Agent and a local Guaardvark. Speech is
@@ -8,11 +8,11 @@ assistant in its own voice.
 ## Run
 
 ```
-./setup.sh            # venv, Piper voices, ~/.local/bin/jarvis symlink
-jarvis --listen       # always-on listener
-jarvis --test-voice   # hear every assistant's voice
-jarvis --cli grok "what is a decorator"        # one text turn, no microphone
-jarvis --cli team "which database should we use"   # ask everyone
+./setup.sh            # venv, Piper voices, ~/.local/bin/mcbeak symlink
+mcbeak --listen       # always-on listener
+mcbeak --test-voice   # hear every assistant's voice
+mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
+mcbeak --cli team "which database should we use"   # ask everyone
 ```
 
 ## Talking to it
@@ -20,7 +20,9 @@ jarvis --cli team "which database should we use"   # ask everyone
 - `Hey Claude ...`, `Hey Grok ...`, `Hey Antigravity ...`, `Hey Cursor ...`,
   `Hey Guaardvark ...` address one assistant. The wake name must come within the
   first three words; a name mentioned later in a sentence does not re-route.
-- `Hey Jarvis ...` goes to the last assistant you spoke to, or the default.
+- `Mr. McBeak ...` goes to the last assistant you spoke to, or the default.
+  The names in `config.yaml` are passed to Whisper as hint words, so rare names
+  like these are heard reliably.
 - `Hey Team ...` asks every member of the council. They answer one after another
   in their own voices. Parallel replies share prior context; sequential replies
   also see earlier answers from the current round.
@@ -41,13 +43,13 @@ files or run commands. Remember the microphone hears everyone in the room.
 Speech recognition (faster-whisper) and the voices (Piper) run on this machine.
 What leaves it is what you say to the assistant you name, sent by that
 assistant's own CLI. Everything else is switched off in `core/privacy.py`, which
-Jarvis applies to itself before any library loads and to every CLI it starts:
+Mr. McBeak applies to itself before any library loads and to every CLI it starts:
 ONNX Runtime usage events, Hugging Face pings (the Whisper model is read from
 the local cache; the network is used once, to download it on first run), and
 the CLIs' own usage metrics, crash reports, Grok's analytics and session-trace
 upload, and Claude Code's update checks. Antigravity's usage telemetry is an
 account setting, and Cursor's is governed by its Privacy Mode; neither has a
-switch Jarvis can set.
+switch Mr. McBeak can set.
 
 ## Config
 
@@ -83,7 +85,7 @@ Council requests run in parallel by default, using a snapshot of prior context.
 retain configured member order. Use `parallel: false` when each member should
 see earlier answers from the current round.
 
-Run `jarvis --doctor` to check configuration, audio devices, voice models,
+Run `mcbeak --doctor` to check configuration, audio devices, voice models,
 workspaces, CLI installation and permission flags without sending model prompts.
 Capture currently requires `audio.sample_rate: 16000`. Timing logs include a
 turn ID, transcription completion, backend response, and first playback start.

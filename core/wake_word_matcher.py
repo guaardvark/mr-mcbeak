@@ -3,7 +3,7 @@ Multi-Target Wake Word Engine with Phonetic Fuzzy Matching.
 Ported and extended from Guaardvark's wakeWordMatcher.js.
 
 Handles:
-- Multiple assistants (Claude, Grok, Antigravity, Cursor, Guaardvark, Jarvis)
+- Multiple assistants, a coordinator name that routes to the default one, and the team
 - Prefix variations ("Hey", "OK", "Yo", "Hello", "Hi") and bare names
 - Phonetic mis-transcription variants
 - Prompt remainder extraction
@@ -17,7 +17,7 @@ import re
 @dataclass
 class MatchResult:
     detected: bool
-    target: Optional[str]  # e.g., "claude", "grok", "agy", "cursor", "guaardvark", "jarvis"
+    target: Optional[str]  # an assistant key, "coordinator" or "team"
     remainder: str         # The prompt payload after the wake phrase
     matched_phrase: Optional[str] = None
     similarity: float = 1.0
@@ -78,26 +78,30 @@ class MultiTargetWakeWordMatcher:
     DEFAULT_PREFIXES = ["hey", "ok", "yo", "hello", "hi", "listen", "dear"]
 
     COUNCIL_TARGET = "team"
+    COORDINATOR_TARGET = "coordinator"
 
     def __init__(self, config_assistants: Dict[str, dict] = None, coordinator_wake_words: List[str] = None,
-                 council_wake_words: List[str] = None):
+                 council_wake_words: List[str] = None, coordinator_variants: List[str] = None):
         self.targets: Dict[str, List[str]] = {}
         self.all_phrases: List[Tuple[str, str]] = []  # (phrase, target_id)
 
         if config_assistants:
-            self._load_from_config(config_assistants, coordinator_wake_words or ["jarvis"], council_wake_words)
+            self._load_from_config(config_assistants, coordinator_wake_words or [], council_wake_words,
+                                   coordinator_variants)
 
     def _load_from_config(self, assistants: Dict[str, dict], coordinator_words: List[str],
-                          council_words: Optional[List[str]] = None):
+                          council_words: Optional[List[str]] = None,
+                          coordinator_variants: Optional[List[str]] = None):
         """Build phrase lookup tables from config."""
         for target_id, info in assistants.items():
             words = list(info.get("wake_words", []))
             phonetics = list(info.get("phonetic_variants", []))
             self.register_target(target_id, words, phonetics)
 
-        # Coordinator ("jarvis") routes to one assistant; council ("team") asks them all
-        coord_words = [w for w in (coordinator_words or ["jarvis", "hey jarvis"]) if "team" not in w]
-        self.register_target("jarvis", coord_words, ["jarviss", "jarvises"])
+        # The coordinator name routes to one assistant; the council ("team") asks them all
+        coord_words = [w for w in coordinator_words if "team" not in w]
+        if coord_words:
+            self.register_target(self.COORDINATOR_TARGET, coord_words, coordinator_variants or [])
         if council_words:
             self.register_target(self.COUNCIL_TARGET, council_words, ["teem"])
 
