@@ -137,14 +137,16 @@ class TTSEngine:
         finally:
             stream.close()
 
-    def play_audio(self, audio: np.ndarray, sample_rate: int, context=None) -> bool:
+    def play_audio(self, audio: np.ndarray, sample_rate: int, context=None, mark_playing: bool = True) -> bool:
         """Play one buffer to completion unless stop() or the context cancels it.
-        Returns True if it played to the end."""
+        Returns True if it played to the end. mark_playing=False keeps the
+        recorder listening, for cues too short and quiet to need echo handling."""
         epoch = self._epoch
         with self._output_lock:
             if self._cancelled(epoch, context):
                 return False
-            self.is_playing = True
+            if mark_playing:
+                self.is_playing = True
             stream, completed = None, False
             try:
                 stream = self._stream_for(None, sample_rate)
@@ -152,7 +154,8 @@ class TTSEngine:
             finally:
                 if stream is not None:
                     self._close(stream, drain=completed)
-                self.is_playing = False
+                if mark_playing:
+                    self.is_playing = False
             return completed
 
     def speak(
@@ -263,8 +266,9 @@ class TTSEngine:
                 # synthesis finish before another reply can start one
                 producer.join(timeout=5.0)
 
-    def play_sound_cue(self, cue_type: str = "chime"):
-        """Generate and play a quick audio earcon (chime or grunt) using synthetic tones."""
+    def play_sound_cue(self, cue_type: str = "chime", context=None):
+        """Generate and play a quick audio earcon (chime, grunt or thinking pulse).
+        A cancelled context skips it, even if it was already waiting for the speaker."""
         try:
             sample_rate = 16000
             if cue_type == "chime":
@@ -277,6 +281,14 @@ class TTSEngine:
                 tone1 *= np.linspace(1, 0.2, len(tone1))
                 tone2 *= np.linspace(1, 0.05, len(tone2))
                 audio = np.concatenate([tone1, tone2])
+            elif cue_type == "thinking":
+                # Soft low two-note pulse (G4 then E4), smooth envelopes so it never clicks
+                notes = []
+                for freq in (392.0, 329.63):
+                    t = np.linspace(0, 0.07, int(sample_rate * 0.07), endpoint=False)
+                    notes += [0.07 * np.sin(2 * np.pi * freq * t) * np.hanning(len(t)),
+                              np.zeros(int(sample_rate * 0.04))]
+                audio = np.concatenate(notes)
             elif cue_type == "grunt":
                 # Guaardvark low grunt (180Hz -> 120Hz)
                 t = np.linspace(0, 0.15, int(sample_rate * 0.15), endpoint=False)
@@ -289,7 +301,9 @@ class TTSEngine:
                 audio = 0.2 * np.sin(2 * np.pi * 523.25 * t)
                 audio *= np.linspace(1, 0.1, len(audio))
 
-            # play_audio sets is_playing, so the recorder ignores the cue and its tail
-            self.play_audio(audio, sample_rate)
+            # The recorder keeps listening through a cue: marking it as playback
+            # made the recorder deaf for the cue plus 0.4 s, which cut off words
+            # spoken right after the chime. Whisper writes nothing for the tones.
+            self.play_audio(audio.astype(np.float32), sample_rate, context=context, mark_playing=False)
         except Exception as e:
             logger.debug(f"Audio cue playback skipped: {e}")

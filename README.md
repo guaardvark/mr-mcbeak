@@ -27,9 +27,12 @@ mcbeak --cli team "which database should we use"   # ask everyone
   in their own voices. Parallel replies share prior context; sequential replies
   also see earlier answers from the current round.
 - For 30 seconds after a reply you can keep talking without a wake word.
+- Anything you add while an assistant is still working on your question joins
+  that question, so it answers both together instead of losing the first.
+- While an assistant works, a soft two-note pulse plays every few seconds
+  (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the
-  conversation. Speech heard while an assistant was busy is dropped after a few
-  seconds rather than replayed late.
+  conversation.
 
 ## Safety
 
@@ -54,7 +57,10 @@ switch Mr. McBeak can set.
 ## Config
 
 `config.yaml` holds the wake words, voices and the per-assistant keys
-`permissions`, `model`, `workspace` and `timeout_seconds`. The `council` section
+`permissions`, `model`, `workspace` and `timeout_seconds`. Claude also takes
+`effort` (low to max) and `mcp`: `none` by default for voice turns, `all`, or a
+list of your MCP server names. Loading MCP servers added about 1.5 s and $0.05 to
+every short turn when measured, so add only the ones you want by voice. The `council` section
 lists who answers to "Hey Team". STT model and device are under `stt`; on a
 machine with a free GPU, `small.en` with `device: cuda` and `compute_type:
 float16` is the first thing to try.

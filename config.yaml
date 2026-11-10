@@ -6,6 +6,8 @@ system:
   default_assistant: "claude"     # Who "Mr. McBeak ..." goes to before any assistant has been used
   log_level: "INFO"
   sound_cues: true                 # Play chimes on wake-word and turn completion
+  thinking_cue: true               # Soft pulse while an assistant is working (needs sound_cues)
+  thinking_cue_every: 3            # Seconds between pulses; the first comes after half of this
   shared_transcript_turns: 6       # How many recent turns of the others each assistant is shown
 
 audio:
@@ -16,6 +18,7 @@ audio:
   min_speech_duration_ms: 400      # Minimum speech duration to discard noise
   max_utterance_seconds: 30        # Maximum recording duration before auto-segmenting
   max_queue_age_seconds: 8         # Speech heard while an assistant was busy is dropped after this
+  preroll_ms: 500                  # Audio kept from just before speech starts, so soft first words survive
   barge_in_enabled: true           # Interrupt assistant when user speaks
 
 stt:
@@ -49,6 +52,8 @@ assistants:
     target_id: "claude"
     cli_cmd: "claude"
     mode: "headless"               # headless or tmux
+    mcp: "none"                    # MCP servers on voice turns: all, none, or a list such as ["guaardvark"].
+                                   # "none" saved ~1.4 s and ~$0.05 per turn (measured 2026-11-10)
     permissions: "readonly"        # "full" lets voice commands edit files and run commands
     wake_words:
       - "claude"

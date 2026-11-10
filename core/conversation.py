@@ -12,6 +12,10 @@ class Conversation:
         self.context = None
         self.future = None
         self.last_reply = None
+        # (target, prompt, context) of the turn still waiting for its reply, so
+        # words added while an assistant is thinking join that question instead
+        # of cancelling it
+        self.pending = None
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="turn")
 
@@ -26,10 +30,11 @@ class Conversation:
             self.tts.stop()
             self.state.finish_turn()
 
-    def submit(self, context, work):
+    def submit(self, context, work, target=None, prompt=None):
         with self.lock:
             self.cancel()
             self.context = context
+            self.pending = (target, prompt, context) if prompt else None
             self.state.begin_turn()
 
             def run():
@@ -40,12 +45,25 @@ class Conversation:
                     with self.lock:
                         if self.context is context:
                             self.state.finish_turn()
+                        self._answered(context)
             self.future = self.executor.submit(run)
+
+    def unanswered(self, target):
+        """The prompt of the turn to `target` still waiting for its reply, or None."""
+        with self.lock:
+            if self.pending and self.pending[0] == target and not self.pending[2].cancelled.is_set():
+                return self.pending[1]
+            return None
+
+    def _answered(self, context):
+        if self.pending and self.pending[2] is context:
+            self.pending = None
 
     def record_turn(self, member, prompt, reply, context):
         with self.lock:
             if context.cancelled.is_set():
                 return False
+            self._answered(context)
             self.state.record_turn(member, prompt, reply)
             return True
 

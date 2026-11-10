@@ -64,7 +64,9 @@ class BaseAdapter(ABC):
         """
         working_dir = cwd or self.workspace or os.getcwd()
         timeout = timeout or self.timeout
-        logger.info(f"[{self.name}] Running: {' '.join(cmd[:6])}... (cwd={working_dir})")
+        # Flags only: the user's words and long JSON arguments stay out of the log
+        shown = [c for c in cmd if "\n" not in c and len(c) <= 60 and (c is cmd[0] or c.startswith("-") or len(c) <= 40)]
+        logger.info(f"[{self.name}] Running: {' '.join(shown)} (cwd={working_dir})")
 
         try:
             if context and context.cancelled.is_set():

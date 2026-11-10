@@ -31,6 +31,7 @@ from core.audio_recorder import AudioRecorder
 from core.state_manager import StateManager
 from core.conversation import Conversation
 from core.turn_context import TurnContext
+from core.thinking_cue import start_thinking_cue
 from core.council import build_prompt, run_council
 from adapters.dispatcher import AdapterDispatcher
 from terminal.tmux_bridge import TmuxBridge
@@ -218,15 +219,29 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 logger.info(f"{target} listening (30s follow-up window, no spoken ack)")
                 return
 
-            print(f"\n[You ➔ {target.upper()}]: \"{prompt}\"")
+            earlier = None if use_tmux else conversation.unanswered(target)
+            if earlier:
+                # Said while the assistant was still working on the last question:
+                # ask both together rather than dropping the first
+                prompt = f"{earlier} {prompt}"
+                logger.info(f"Adding to the unanswered question for {target}")
+                print(f"\n[You ➔ {target.upper()}, added while it was thinking]: \"{prompt}\"")
+            else:
+                print(f"\n[You ➔ {target.upper()}]: \"{prompt}\"")
 
             def execute_turn(context):
+                # Soft pulse while the assistant works (first after 1.5 s), so a long
+                # wait does not sound like a dead microphone
+                cue_on = system_cfg.get("sound_cues", True) and system_cfg.get("thinking_cue", True) and not use_tmux
+                stop_cue = (start_thinking_cue(tts, context, float(system_cfg.get("thinking_cue_every", 3.0)))
+                            if cue_on else (lambda: None))
                 try:
                     if target == "team":
                         def transcript_for(member):
                             return state_mgr.recent_transcript(shared_turns, exclude_assistant=member, names=display_names)
 
                         def on_reply(member, reply, voice_file, speaker_id):
+                            stop_cue()
                             if context.cancelled.is_set():
                                 return
                             if not conversation.record_turn(member, prompt, reply, context):
@@ -248,12 +263,15 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                         full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
                                                    list(display_names.values()))
                         response, voice_file, speaker_id = dispatcher.dispatch(target, full_prompt, context=context)
+                        stop_cue()
                         if conversation.record_turn(target, prompt, response, context):
                             speak_reply(target, response, voice_file, speaker_id, context=context)
                 except Exception:
                     logger.exception("Error executing turn %s", context.id)
+                finally:
+                    stop_cue()
 
-            conversation.submit(context, execute_turn)
+            conversation.submit(context, execute_turn, target=target, prompt=prompt)
 
         except Exception as err:
             logger.error(f"Error handling voice utterance: {err}", exc_info=True)
@@ -267,6 +285,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         min_speech_duration_ms=audio_cfg.get("min_speech_duration_ms", 400),
         max_utterance_seconds=audio_cfg.get("max_utterance_seconds", 30),
         max_queue_age_seconds=float(audio_cfg.get("max_queue_age_seconds", 8.0)),
+        preroll_ms=int(audio_cfg.get("preroll_ms", 500)),
         on_utterance_ready=on_utterance,
         on_barge_in=conversation.cancel,
         tts_engine=tts,

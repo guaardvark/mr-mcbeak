@@ -29,6 +29,7 @@ class AudioRecorder:
         min_speech_duration_ms: int = 400,
         max_utterance_seconds: int = 30,
         max_queue_age_seconds: float = 8.0,
+        preroll_ms: int = 500,
         on_utterance_ready: Optional[Callable[[np.ndarray], None]] = None,
         tts_engine: Optional[Any] = None,
         on_barge_in: Optional[Callable] = None,
@@ -43,6 +44,10 @@ class AudioRecorder:
         self._interrupt_worker = None
         self._barge_active = False
         self._preroll = deque(maxlen=3)
+        # The last ~0.5 s before speech onset, prepended to every utterance: onset
+        # needs two loud 50 ms frames, so a soft first word ("are you ...") and the
+        # first loud frame were otherwise lost.
+        self._history = deque(maxlen=max(1, int(preroll_ms) // 50))
         self.sample_rate = sample_rate
         self.channels = channels
         self.silence_threshold = silence_threshold
@@ -88,12 +93,15 @@ class AudioRecorder:
             self._is_speaking = False
         self._tts_was_playing = tts_playing
         if now < self._ignore_until and not tts_playing:
+            self._history.clear()  # never prepend speaker tail to the next utterance
             return
 
         # Talk-over / Barge-in: halt playback, then capture the interrupting speech
         if tts_playing and not self.barge_in_enabled:
+            self._history.clear()
             return
         if tts_playing and not self._barge_active:
+            self._history.clear()
             self._preroll.append(chunk)
             if rms > self.silence_threshold:
                 self._consecutive_speech_frames += 1
@@ -120,15 +128,18 @@ class AudioRecorder:
             if not self._is_speaking and self._consecutive_speech_frames >= 2:
                 self._is_speaking = True
                 self._speech_start_time = now
-                self._audio_buffer.clear()
+                self._audio_buffer = list(self._history)
+                self._history.clear()
                 logger.debug("Speech onset detected.")
 
         else:
             self._consecutive_silence_frames += 1
             self._consecutive_speech_frames = 0
 
-        # Accumulate audio while speaking
-        if self._is_speaking:
+        # Accumulate audio while speaking; otherwise keep it as lead-in
+        if not self._is_speaking:
+            self._history.append(chunk)
+        else:
             self._audio_buffer.append(chunk)
 
             speech_duration = (now - self._speech_start_time) * 1000.0
