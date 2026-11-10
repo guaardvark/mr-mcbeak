@@ -191,35 +191,77 @@ class TTSEngine:
             if self._cancelled(epoch, context):
                 return
             self.is_playing = True
-            # One stream for the whole reply, so sentences play without reopen gaps
+            # Synthesis runs ahead of playback on its own thread: a sentence takes
+            # ~0.4 s to synthesize while the device buffers ~35 ms, so synthesizing
+            # in line left the speakers running dry at every sentence boundary.
+            # Playback keeps one stream for the whole reply and is the only thread
+            # that touches PortAudio.
+            chunks: queue.Queue = queue.Queue(maxsize=8)
+            done, stop = object(), threading.Event()
+
+            def halted():
+                return stop.is_set() or self._cancelled(epoch, context)
+
+            def offer(item):
+                while not halted():
+                    try:
+                        chunks.put(item, timeout=0.1)
+                        return
+                    except queue.Full:
+                        pass
+
+            def synthesize():
+                try:
+                    for sent in sentences:
+                        if halted():
+                            return
+                        try:
+                            for chunk in voice.synthesize(sent, syn_config=syn_cfg):
+                                offer(chunk)
+                                if halted():
+                                    return
+                        except Exception as e:
+                            logger.error(f"Error synthesizing sentence '{sent[:30]}...': {e}")
+                finally:
+                    offer(done)
+
+            producer = threading.Thread(target=synthesize, daemon=True, name="tts-synth")
+            producer.start()
             stream, completed = None, True
             try:
-                for sent in sentences:
+                while True:
+                    try:
+                        chunk = chunks.get(timeout=0.1)
+                    except queue.Empty:
+                        if self._cancelled(epoch, context):
+                            completed = False
+                            break
+                        continue
+                    if chunk is done:
+                        break
                     if self._cancelled(epoch, context):
                         completed = False
                         break
-                    try:
-                        for chunk in voice.synthesize(sent, syn_config=syn_cfg):
-                            if self._cancelled(epoch, context):
-                                completed = False
-                                break
-                            if context:
-                                context.first_audio()
-                            stream = self._stream_for(stream, chunk.sample_rate)
-                            completed = self._write(stream, chunk.audio_float_array, epoch, context)
-                            if not completed:
-                                break
-                    except Exception as e:
-                        logger.error(f"Error synthesizing/playing sentence '{sent[:30]}...': {e}")
+                    if context:
+                        context.first_audio()
+                    stream = self._stream_for(stream, chunk.sample_rate)
+                    completed = self._write(stream, chunk.audio_float_array, epoch, context)
                     if not completed:
                         break
+            except Exception as e:
+                completed = False
+                logger.error(f"Error playing TTS audio: {e}")
             finally:
+                stop.set()
                 if stream is not None:
                     try:
                         self._close(stream, drain=completed)
                     except Exception as e:
                         logger.error(f"Error closing TTS output stream: {e}")
                 self.is_playing = False
+                # espeak-ng (Piper's phonemizer) is not thread-safe: let this
+                # synthesis finish before another reply can start one
+                producer.join(timeout=5.0)
 
     def play_sound_cue(self, cue_type: str = "chime"):
         """Generate and play a quick audio earcon (chime or grunt) using synthetic tones."""
