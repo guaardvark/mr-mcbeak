@@ -116,6 +116,21 @@ def hint_words(config: dict) -> str:
     return ", ".join(dict.fromkeys(n for n in names if n))
 
 
+def whisper_lead_in(config: dict) -> str:
+    """The names as a sentence Whisper reads before each clip, e.g. "Mr. McBeak,
+    Claude, Grok, .... Hey Claude, hey Grok, Mr. McBeak, hey team." """
+    stt_cfg = config.get("stt") or {}
+    if str(stt_cfg.get("hint_style", "lead_in")).lower() != "lead_in":
+        return ""
+    names = [bare_name(w) for a in (config.get("assistants") or {}).values()
+             for w in (a.get("wake_words") or [])[:1]]
+    calls = [f"Hey {n}" if i == 0 else f"hey {n}" for i, n in enumerate(names[:2])]
+    if config.get("coordinator_wake_words"):
+        calls.append(app_name(config))
+    calls.append("hey team")
+    return f"{hint_words(config)}. {', '.join(calls)}."
+
+
 def print_banner(config: dict, adapters: dict, default_assistant: str):
     """Who answers to what, in which voice and with which permissions."""
     rows = []
@@ -186,6 +201,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         vad_filter=stt_cfg.get("vad_filter", True),
         hint_words=hint_words(config),
         language=stt_cfg.get("language", "en"),
+        lead_in=whisper_lead_in(config),
     )
     stt.load_model()
 

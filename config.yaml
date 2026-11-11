@@ -30,10 +30,12 @@ audio:
 
 stt:
   engine: "faster_whisper"         # faster_whisper
-  model_size: "small.en"           # tiny.en, base.en or small.en. Measured 2026-10-20 on an
-                                   # RTX 40-series GPU, 1.7 s clips: small.en 0.04 s/clip on CUDA
-                                   # (0.45 s on CPU), base.en 0.02 s, tiny.en 0.01 s; small.en
-                                   # got the content words right where tiny.en did not.
+  model_size: "large-v3-turbo"     # Measured 2026-11-10 on the GPU, int8, names as a lead-in sentence:
+                                   # LibriSpeech test.other word errors 5.9% (small.en 10.4%), spoken
+                                   # commands routed right 39/40 (small.en with hotwords 36/40), false
+                                   # wakes on unaddressed speech 1/200 (6/200), ~95 ms per clip (~70 ms).
+                                   # About 1 GB of GPU memory. small.en still works on a CPU-only box.
+  hint_style: "lead_in"            # lead_in (names as a sentence Whisper reads first) or hotwords
   device: "auto"                   # auto, cuda, or cpu
   compute_type: "int8"             # int8 works on CPU and CUDA; float16 measured no faster
   beam_size: 5

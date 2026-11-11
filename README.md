@@ -31,8 +31,10 @@ includes what was heard and stays on this machine.
   `Hey Guaardvark ...` address one assistant. The wake name must come within the
   first three words; a name mentioned later in a sentence does not re-route.
 - `Mr. McBeak ...` goes to the last assistant you spoke to, or the default.
-  The names in `config.yaml` are passed to Whisper as hint words, so rare names
-  like these are heard reliably.
+  The names in `config.yaml` are given to Whisper (large-v3-turbo) as a lead-in
+  sentence, so rare names like these are heard reliably: 39 of 40 spoken test
+  commands reached the right assistant, and 1 of 200 unaddressed LibriSpeech
+  clips woke one.
 - `Hey Team ...` asks every member of the council. They answer one after another
   in their own voices. Parallel replies share prior context; sequential replies
   also see earlier answers from the current round.
