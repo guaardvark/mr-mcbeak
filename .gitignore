@@ -4,5 +4,6 @@ __pycache__/
 models/piper/*.onnx
 models/whisper/
 models/smart-turn/
+models/kokoro/
 local-workspace-only/
 *.log

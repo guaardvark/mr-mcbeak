@@ -77,11 +77,22 @@ path = turn_detector.model_path(folder)
 print(f"   • {'present' if path.exists() else 'downloaded'}: {path if path.exists() else turn_detector.download_model(folder)}")
 PY
 
-# 4. Create Symlink in ~/.local/bin
+# 4. Kokoro voices (hexgrad/Kokoro-82M via kokoro-onnx, Apache-2.0, ~350 MB)
+MODELS_KOKORO="$SCRIPT_DIR/models/kokoro"
+mkdir -p "$MODELS_KOKORO"
+for f in kokoro-v1.0.onnx voices-v1.0.bin; do
+    if [ ! -f "$MODELS_KOKORO/$f" ]; then
+        echo "   • Downloading Kokoro $f..."
+        wget -q --show-progress -O "$MODELS_KOKORO/$f" \
+            "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$f"
+    fi
+done
+
+# 5. Create Symlink in ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/mcbeak"
 
-# 5. Verify AI Assistant CLIs
+# 6. Verify AI Assistant CLIs
 echo "🤖 Verifying AI Assistant CLIs..."
 for cli in claude grok agy agent guaardvark; do
     if command -v "$cli" >/dev/null 2>&1; then
@@ -91,7 +102,7 @@ for cli in claude grok agy agent guaardvark; do
     fi
 done
 
-# 6. Run Verification Unit Tests
+# 7. Run Verification Unit Tests
 echo "🧪 Running unit tests..."
 "$VENV_DIR/bin/python" -m unittest discover "$SCRIPT_DIR/tests"
 

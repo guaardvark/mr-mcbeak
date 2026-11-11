@@ -246,6 +246,15 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         extra_model_dirs=tts_cfg.get("extra_model_dirs") or [],
     )
     dispatcher = AdapterDispatcher(config_assistants=assistants_cfg)
+    # Load every voice now (Kokoro's model and phonemizer took ~0.7 s on first
+    # use), so the first reply is not slower than the rest
+    for adapter in dict.fromkeys(dispatcher.adapters.values()):
+        try:
+            voice = tts.get_or_load_voice(adapter.voice_file)
+            if str(adapter.voice_file).startswith("kokoro:"):
+                list(voice.synthesize("Ready."))
+        except Exception as err:
+            logger.warning(f"Voice {adapter.voice_file} for {adapter.name} failed to load: {err}")
     conversation = Conversation(state_mgr, tts, dispatcher)
     # tmux treats "." and ":" as target separators, so the session name is letters, digits and dashes
     tmux = TmuxBridge(session_name=re.sub(r"[^a-z0-9]+", "-", app_name(config).lower()).strip("-") or "voice-cockpit")

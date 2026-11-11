@@ -2,13 +2,13 @@
 
 Hands-free voice front end for several AI coding assistants on one machine:
 Claude Code, Grok, Antigravity, Cursor Agent and a local Guaardvark. Speech is
-recognised locally (faster-whisper) and replies are spoken locally (Piper), each
-assistant in its own voice.
+recognised locally (faster-whisper) and replies are spoken locally (Kokoro or
+Piper), each assistant in its own voice.
 
 ## Run
 
 ```
-./setup.sh            # venv, Piper voices, ~/.local/bin/mcbeak symlink
+./setup.sh            # venv, Kokoro and Piper voices, models, ~/.local/bin/mcbeak symlink
 mcbeak                # always-on listener (same as mcbeak --listen)
 mcbeak --verbose      # same, with the technical log lines in the terminal too
 mcbeak --replace      # stop the copy already listening and start this one
@@ -77,7 +77,7 @@ request.
 
 ## Telemetry
 
-Speech recognition (faster-whisper) and the voices (Piper) run on this machine.
+Speech recognition (faster-whisper) and the voices (Kokoro, Piper) run on this machine.
 What leaves it is what you say to the assistant you name, sent by that
 assistant's own CLI. Everything else is switched off in `core/privacy.py`, which
 Mr. McBeak applies to itself before any library loads and to every CLI it starts:
@@ -98,6 +98,14 @@ every short turn when measured, so add only the ones you want by voice. The `cou
 lists who answers to "Hey Team". STT model and device are under `stt`; on a
 machine with a free GPU, `small.en` with `device: cuda` and `compute_type:
 float16` is the first thing to try.
+
+A voice is either a Piper model file (`en_US-libritts-high.onnx` with a
+`voice_speaker` number) or a Kokoro voice (`kokoro:am_michael`). Kokoro sounds
+more natural and Whisper understood it slightly better (65 of 67 words against
+63 for Piper's LibriTTS #430), but its first sentence takes about 0.35 s to
+synthesize on the CPU against 0.17 s. Clear male Kokoro voices: am_michael,
+am_adam, am_echo, am_eric, am_liam, am_onyx, and British bm_george, bm_lewis,
+bm_daniel, bm_fable. `mcbeak --test-voice` plays each assistant's voice.
 
 ## Tests
 

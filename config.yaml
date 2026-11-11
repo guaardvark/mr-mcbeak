@@ -79,8 +79,8 @@ assistants:
       - "clawed"
       - "claud"
       - "cloud"
-    voice: "en_US-libritts-high.onnx"
-    voice_speaker: 430             # male; clearest of 37 male LibriTTS speakers screened 2026-11-10
+    voice: "kokoro:am_michael"     # Kokoro v1.0, male; 65/67 words heard vs 63 for Piper LibriTTS #430
+    voice_speaker: 0               # (multi-speaker Piper models only). Back to Piper: "en_US-libritts-high.onnx", 430
     prompt_prefix: ""
     description: "Deep reasoning, full codebase refactoring & planning"
 

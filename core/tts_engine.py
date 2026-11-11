@@ -65,6 +65,14 @@ class TTSEngine:
             if model_filename in self.loaded_voices:
                 return self.loaded_voices[model_filename]
 
+            from core import kokoro_voice
+            if kokoro_voice.is_kokoro(model_filename):
+                name = model_filename[len(kokoro_voice.PREFIX):]
+                logger.info(f"Loading Kokoro voice {name}...")
+                voice = kokoro_voice.KokoroVoice(name, self.models_dir.parent / "kokoro")
+                self.loaded_voices[model_filename] = voice
+                return voice
+
             # 1. Look in local models_dir
             model_path = self.models_dir / model_filename
             
