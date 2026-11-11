@@ -43,10 +43,12 @@ def levenshtein_distance(a: str, b: str) -> int:
     return dp[m][n]
 
 
-def fuzzy_index_of(text: str, phrase: str, threshold: float = 0.72) -> Tuple[int, int, float]:
+def fuzzy_index_of(text: str, phrase: str, threshold: float = 0.72, starts=None) -> Tuple[int, int, float]:
     """
     Search for phrase inside text with sliding window Levenshtein similarity.
-    Returns (start_idx, end_idx, best_similarity).
+    Returns (start_idx, end_idx, best_similarity). With starts, only windows
+    beginning at those offsets are tried: scanning every offset of a long
+    sentence took 0.4 s for 9 words and 2.6 s for 40 (measured 2026-11-10).
     """
     phrase_len = len(phrase)
     if phrase_len == 0 or len(text) < phrase_len:
@@ -58,7 +60,9 @@ def fuzzy_index_of(text: str, phrase: str, threshold: float = 0.72) -> Tuple[int
 
     # Slide windows of length phrase_len +/- 2 chars
     for window_size in range(max(1, phrase_len - 2), min(len(text) + 1, phrase_len + 3)):
-        for i in range(0, len(text) - window_size + 1):
+        offsets = range(0, len(text) - window_size + 1) if starts is None else \
+            [i for i in sorted(starts) if i + window_size <= len(text)]
+        for i in offsets:
             window = text[i : i + window_size]
             dist = levenshtein_distance(window, phrase)
             sim = 1.0 - (dist / max(len(window), phrase_len))
@@ -192,7 +196,7 @@ class MultiTargetWakeWordMatcher:
         for phrase, target_id in self.all_phrases:
             if len(phrase) < 4:
                 continue
-            start, end, sim = fuzzy_index_of(text_clean, phrase, threshold=0.72)
+            start, end, sim = fuzzy_index_of(text_clean, phrase, threshold=0.72, starts=allowed_starts)
             if start == -1 or start not in allowed_starts:
                 continue
             if end < len(text_clean) and text_clean[end] != " ":
