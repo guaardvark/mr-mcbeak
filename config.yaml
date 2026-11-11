@@ -155,6 +155,27 @@ assistants:
     prompt_prefix: ""
     description: "Cursor AI Agent for rapid code generation & edits"
 
+  codex:
+    name: "Codex"
+    target_id: "codex"
+    cli_cmd: "codex"               # OpenAI Codex CLI; analytics, feedback and OTel export are switched off per call
+    mode: "headless"
+    permissions: "readonly"        # readonly = Codex's read-only sandbox; full = it may write inside its workspace
+    wake_words:
+      - "codex"
+      - "hey codex"
+      - "ok codex"
+      - "yo codex"
+      - "hello codex"
+    phonetic_variants:
+      - "codecs"
+      - "kodex"
+      - "code x"
+      - "codec"
+    voice: "kokoro:bm_george"      # British male, so Codex is easy to tell apart
+    voice_speaker: 0
+    description: "OpenAI Codex CLI"
+
   guaardvark:
     name: "Guaardvark"
     target_id: "guaardvark"
@@ -208,6 +229,6 @@ council:
     - "ok team"
     - "everyone"
     - "hey everyone"
-  members: ["claude", "grok", "antigravity", "cursor", "guaardvark"]
+  members: ["claude", "grok", "antigravity", "cursor", "codex", "guaardvark"]
   parallel: true
   reply_order: completion         # completion (fastest first) or member (configured order)

@@ -99,7 +99,7 @@ def doctor(config):
                 if not a.capabilities["readonly"]:
                     raise ValueError("read-only enforcement unavailable; adapter will refuse requests")
                 flag = {"claude": "--permission-mode", "grok": "--deny", "cursor": "--mode",
-                        "antigravity": "--mode"}[a.target_id]
+                        "antigravity": "--mode", "codex": "--sandbox"}[a.target_id]
                 if flag not in result.stdout + result.stderr:
                     raise ValueError(f"CLI help does not advertise required permission flag {flag}")
             return a.cli_binary

@@ -36,14 +36,16 @@ class TmuxBridge:
             raise ValueError(f"{adapter.name} cannot enforce read-only permissions")
         # Panes inherit the tmux server's environment, not the cockpit's, so the
         # telemetry opt-outs ride on the command itself
-        cmd = ["env", *(f"{k}={v}" for k, v in NO_TELEMETRY_ENV.items()), adapter.cli_binary]
+        cmd = ["env", *(f"{k}={v}" for k, v in NO_TELEMETRY_ENV.items()), adapter.cli_binary,
+               *getattr(adapter, "launch_args", [])]
         if adapter.model:
             cmd += ["--model", adapter.model]
         if adapter.readonly:
             flags = {"claude": ["--permission-mode", "plan"],
                      "cursor": ["--mode", "ask"],
                      "antigravity": ["--mode", "plan"],
-                     "grok": ["--deny", "Write", "--deny", "Edit", "--deny", "Bash"]}
+                     "grok": ["--deny", "Write", "--deny", "Edit", "--deny", "Bash"],
+                     "codex": ["--sandbox", "read-only"]}
             cmd += flags[adapter.target_id]
         return shlex.join(cmd)
 

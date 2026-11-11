@@ -12,6 +12,7 @@ from adapters.grok_adapter import GrokAdapter
 from adapters.agy_adapter import AntigravityAdapter
 from adapters.cursor_adapter import CursorAdapter
 from adapters.guaardvark_adapter import GuaardvarkAdapter
+from adapters.codex_adapter import CodexAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class AdapterDispatcher:
             "agy": AntigravityAdapter,
             "cursor": CursorAdapter,
             "guaardvark": GuaardvarkAdapter,
+            "codex": CodexAdapter,
         }
 
         for key, cfg in config_assistants.items():

@@ -1,7 +1,7 @@
 # Mr. McBeak
 
 Hands-free voice front end for several AI coding assistants on one machine:
-Claude Code, Grok, Antigravity, Cursor Agent and a local Guaardvark. Speech is
+Claude Code, Codex, Grok, Antigravity, Cursor Agent and a local Guaardvark. Speech is
 recognised locally (faster-whisper) and replies are spoken locally (Kokoro or
 Piper), each assistant in its own voice.
 
@@ -27,8 +27,8 @@ includes what was heard and stays on this machine.
 
 ## Talking to it
 
-- `Hey Claude ...`, `Hey Grok ...`, `Hey Antigravity ...`, `Hey Cursor ...`,
-  `Hey Guaardvark ...` address one assistant. The wake name must come within the
+- `Hey Claude ...`, `Hey Codex ...`, `Hey Grok ...`, `Hey Antigravity ...`,
+  `Hey Cursor ...`, `Hey Guaardvark ...` address one assistant. The wake name must come within the
   first three words; a name mentioned later in a sentence does not re-route.
 - `Mr. McBeak ...` goes to the last assistant you spoke to, or the default.
   The names in `config.yaml` are given to Whisper (large-v3-turbo) as a lead-in
@@ -69,7 +69,8 @@ includes what was heard and stays on this machine.
 ## Safety
 
 Supported adapters run read-only by default (Claude plan mode, Antigravity plan mode,
-Cursor ask mode, Grok with write, edit and shell tools denied). Set
+Cursor ask mode, Codex's read-only sandbox, Grok with write, edit and shell tools
+denied). Set
 `permissions: full` on an assistant in `config.yaml` to let voice commands edit
 files or run commands. Remember the microphone hears everyone in the room.
 
@@ -92,7 +93,9 @@ Mr. McBeak applies to itself before any library loads and to every CLI it starts
 ONNX Runtime usage events, Hugging Face pings (the Whisper model is read from
 the local cache; the network is used once, to download it on first run), and
 the CLIs' own usage metrics, crash reports, Grok's analytics and session-trace
-upload, and Claude Code's update checks. Antigravity's usage telemetry is an
+upload, Codex's analytics, feedback and OpenTelemetry export (passed as `-c`
+overrides on every call; traced: with them, a Codex turn contacts only
+chatgpt.com), and Claude Code's update checks. Antigravity's usage telemetry is an
 account setting, and Cursor's is governed by its Privacy Mode; neither has a
 switch Mr. McBeak can set.
 
