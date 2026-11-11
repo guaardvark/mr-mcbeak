@@ -8,6 +8,7 @@ system:
   sound_cues: true                 # Play chimes on wake-word and turn completion
   thinking_cue: true               # Soft pulse while an assistant is working (needs sound_cues)
   thinking_cue_every: 3            # Seconds between pulses; the first comes after half of this
+  speak_early: true                # Claude: speak the first sentence while the rest is still being written
   shared_transcript_turns: 6       # How many recent turns of the others each assistant is shown
 
 audio:

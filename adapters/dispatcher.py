@@ -51,7 +51,8 @@ class AdapterDispatcher:
             with self._locks[adapter]:
                 adapter.reset_session()
 
-    def dispatch(self, target_id: str, prompt: str, cwd: Optional[str] = None, context=None) -> Tuple[str, str, int]:
+    def dispatch(self, target_id: str, prompt: str, cwd: Optional[str] = None, context=None,
+                 on_text=None) -> Tuple[str, str, int]:
         """
         Execute prompt against target adapter.
         Returns: (response_text, voice_file, speaker_id)
@@ -72,7 +73,10 @@ class AdapterDispatcher:
         with self._locks[adapter]:
             if context and context.cancelled.is_set():
                 return "", adapter.voice_file, adapter.voice_speaker
-            response = adapter.execute(prompt, cwd=cwd, context=context)
+            if on_text and getattr(adapter, "streams", False):
+                response = adapter.execute(prompt, cwd=cwd, context=context, on_text=on_text)
+            else:
+                response = adapter.execute(prompt, cwd=cwd, context=context)
         if context:
             context.timing("backend_response")
             if context.cancelled.is_set():

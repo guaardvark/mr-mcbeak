@@ -8,6 +8,7 @@ import sys
 import time
 import yaml
 import signal
+import threading
 import logging
 import argparse
 import faulthandler
@@ -33,6 +34,7 @@ from core.conversation import Conversation
 from core.turn_context import TurnContext
 from core.thinking_cue import start_thinking_cue
 from core import approval
+from core.speech_stream import SentenceFeed
 from core.council import build_prompt, run_council
 from core.single_instance import InstanceLock, describe, other_copies, stop_copies
 from adapters.dispatcher import AdapterDispatcher
@@ -252,6 +254,8 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     continuation_s = float(audio_cfg.get("continuation_seconds", 4.0))
     # Actions an assistant was held back from, waiting for a spoken yes
     held = approval.HeldActions()
+    # Start speaking a reply's first sentence while the rest is still being written
+    speak_early = bool(system_cfg.get("speak_early", True))
 
     def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False, context=None):
         if context and context.cancelled.is_set():
@@ -390,17 +394,44 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                         adapter = dispatcher.adapters.get(target)
                         if approving and adapter is not None:
                             adapter.approve_next = approving
-                        response, voice_file, speaker_id = dispatcher.dispatch(target, full_prompt, context=context)
+                        feed, live = None, {}
+                        if speak_early and getattr(adapter, "streams", False):
+                            feed = SentenceFeed(max_sentences=3)
+
+                            def on_text(piece):
+                                if piece is None:
+                                    feed.mute()
+                                    return
+                                if feed.add(piece) and "speech" not in live and not context.cancelled.is_set():
+                                    stop_cue()
+                                    logger.info(f"Speaking ({target}) as the reply arrives")
+                                    live["speech"] = threading.Thread(
+                                        target=conversation.speak_stream, name="reply-speech", daemon=True,
+                                        args=(feed, adapter.voice_file, adapter.voice_speaker, context))
+                                    live["speech"].start()
+                        response, voice_file, speaker_id = dispatcher.dispatch(
+                            target, full_prompt, context=context, on_text=on_text if feed else None)
                         stop_cue()
+                        if feed:
+                            feed.close()
                         waiting = list(getattr(adapter, "last_held", None) or [])
                         if waiting and not context.cancelled.is_set():
+                            if feed:
+                                feed.mute()
+                            if "speech" in live:
+                                live.pop("speech").join()
                             held.hold(target, waiting)
                             logger.info(f"Held for a spoken yes ({target}): {waiting}")
                             for action in waiting:
                                 show_note(f"held for your yes: {action['tool']} {action['detail']}")
                             what = approval.describe(waiting, getattr(adapter, "confirm_first", []))
                             response = f"{display_names.get(target, target)} wants to {what}. Should it go ahead?"
-                        if conversation.record_turn(target, prompt, response, context):
+                        if "speech" in live:
+                            # Already being spoken: show it, keep the turn, wait for the voice
+                            if conversation.record_turn(target, prompt, response, context):
+                                show_reply(display_names.get(target, target), response)
+                            live["speech"].join()
+                        elif conversation.record_turn(target, prompt, response, context):
                             speak_reply(target, response, voice_file, speaker_id, context=context)
                 except Exception:
                     logger.exception("Error executing turn %s", context.id)

@@ -98,6 +98,17 @@ class Conversation:
         if not context.cancelled.is_set():
             context.reply_finished_at = time.monotonic()
 
+    def speak_stream(self, feed, voice, speaker, context):
+        """Speak sentences from a SentenceFeed as they arrive."""
+        if context.cancelled.is_set():
+            return
+        self.tts.speak("", voice_file=voice, speaker_id=speaker, context=context,
+                       sentences=feed.sentences(context))
+        with self.lock:
+            self.last_reply = (feed.spoken, voice, speaker)
+        if not context.cancelled.is_set():
+            context.reply_finished_at = time.monotonic()
+
     def control(self, prompt, target):
         command = prompt.lower().strip(" .!?\t\n")
         if command not in {"stop", "go to sleep", "new conversation", "repeat that"}:

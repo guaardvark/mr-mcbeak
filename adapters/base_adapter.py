@@ -111,6 +111,70 @@ class BaseAdapter(ABC):
             logger.error(f"[{self.name}] Execution error: {e}")
             return f"Error communicating with {self.name}: {str(e)}"
 
+    def run_streaming(self, cmd: list[str], on_line, cwd: Optional[str] = None, context=None) -> str:
+        """Like run_subprocess, but hands each stdout line to on_line as it
+        arrives. Returns all of stdout, or a short spoken error."""
+        import queue
+        import threading
+        working_dir = cwd or self.workspace or os.getcwd()
+        shown = [c for c in cmd if "\n" not in c and len(c) <= 60 and (c is cmd[0] or c.startswith("-") or len(c) <= 40)]
+        logger.info(f"[{self.name}] Running: {' '.join(shown)} (cwd={working_dir})")
+        if context and context.cancelled.is_set():
+            return ""
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    cwd=working_dir, stdin=subprocess.DEVNULL, start_new_session=True,
+                                    env=child_env(), bufsize=1)
+        except Exception as e:
+            logger.error(f"[{self.name}] Execution error: {e}")
+            return f"Error communicating with {self.name}: {str(e)}"
+        lines: "queue.Queue" = queue.Queue()
+        stderr_parts = []
+        reader = threading.Thread(target=lambda: ([lines.put(l) for l in proc.stdout], lines.put(None)), daemon=True)
+        err_reader = threading.Thread(target=lambda: stderr_parts.append(proc.stderr.read()), daemon=True)
+        reader.start()
+        err_reader.start()
+        collected = []
+        deadline = time.monotonic() + self.timeout
+
+        def stop_process():
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(proc.pid, sig)
+                    proc.wait(timeout=0.5)
+                    return
+                except ProcessLookupError:
+                    return
+                except subprocess.TimeoutExpired:
+                    continue
+
+        while True:
+            if context and context.cancelled.is_set():
+                stop_process()
+                return ""
+            if time.monotonic() >= deadline:
+                stop_process()
+                logger.error(f"[{self.name}] Command timed out after {self.timeout}s")
+                return f"Sorry, {self.name} took too long to respond."
+            try:
+                line = lines.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            collected.append(line)
+            try:
+                on_line(line)
+            except Exception as e:
+                logger.error(f"[{self.name}] Stream handler error: {e}")
+        proc.wait()
+        err_reader.join(timeout=1.0)
+        if proc.returncode != 0 and not collected:
+            err = "".join(stderr_parts).strip()
+            logger.warning(f"[{self.name}] Exit code {proc.returncode}: {err[:300]}")
+            return f"Error running {self.name}: {err[:150]}"
+        return "".join(collected)
+
     @staticmethod
     def parse_json_reply(raw: str, text_keys: tuple, session_keys: tuple) -> tuple[str, Optional[str]]:
         """

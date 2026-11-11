@@ -101,14 +101,58 @@ class ClaudeAdapter(BaseAdapter):
         super().reset_session()
         self.last_held, self.approve_next = [], []
 
-    def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
+    # Replies can be spoken while they are being written (execute(on_text=...))
+    streams = True
+
+    @staticmethod
+    def _stream_handler(on_text):
+        """Turns stream-json lines into on_text(piece) calls for the main
+        conversation's text; on_text(None) once a tool was refused for lack of
+        permission, since what follows explains the refusal and the cockpit asks
+        its own question instead."""
+        def handle(line):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                return
+            if event.get("parent_tool_use_id"):
+                return  # a subagent's own text
+            if event.get("type") == "stream_event":
+                inner = event.get("event") or {}
+                delta = inner.get("delta") or {}
+                if inner.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                    on_text(delta.get("text") or "")
+            elif event.get("type") == "user":
+                for block in ((event.get("message") or {}).get("content") or []):
+                    if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
+                        body = json.dumps(block.get("content", ""))
+                        if "permission" in body.lower() or "haven't granted" in body.lower():
+                            on_text(None)
+        return handle
+
+    @staticmethod
+    def _result_line(raw: str) -> str:
+        """The final {"type": "result", ...} event of a stream-json run."""
+        for line in reversed((raw or "").splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    if json.loads(line).get("type") == "result":
+                        return line
+                except ValueError:
+                    continue
+        return raw
+
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None, on_text=None) -> str:
         self.last_held = []
         if not prompt or not prompt.strip():
             return "Yes, how can I help you?"
 
         # The prompt goes first: --mcp-config takes several values and would
         # swallow a prompt placed after it
-        cmd = [self.cli_binary, "-p", prompt, "--output-format", "json"]
+        cmd = [self.cli_binary, "-p", prompt]
+        cmd += (["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+                if on_text else ["--output-format", "json"])
         if self.model:
             cmd += ["--model", self.model]
         if self.effort:
@@ -130,7 +174,10 @@ class ClaudeAdapter(BaseAdapter):
             cmd += ["--resume", self.session_id]
         cmd += self._mcp_args()
 
-        raw = self.run_subprocess(cmd, cwd=cwd, context=context)
+        if on_text:
+            raw = self._result_line(self.run_streaming(cmd, self._stream_handler(on_text), cwd=cwd, context=context))
+        else:
+            raw = self.run_subprocess(cmd, cwd=cwd, context=context)
         self.last_held = self._held(raw)
         text, session = self.parse_json_reply(raw, ("result",), ("session_id",))
         if session:

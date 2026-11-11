@@ -50,6 +50,9 @@ includes what was heard and stays on this machine.
   same goes for a pause mid-sentence: carry on within a few seconds
   (`audio.continuation_seconds`), before the reply has been spoken in full, and
   the reply stops and the whole sentence is asked again as one question.
+- Claude's replies start playing as soon as the first sentence is written
+  (`system.speak_early`); with Opus that was about 0.8 s sooner on a
+  three-sentence answer. One-sentence answers play when they are complete.
 - While an assistant works, a soft two-note pulse plays every few seconds
   (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the

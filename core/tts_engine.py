@@ -165,19 +165,20 @@ class TTSEngine:
         speaker_id: int = 0,
         speed: float = 1.0,
         context=None,
-        block: bool = True
+        block: bool = True,
+        sentences=None,
     ):
         """
         Synthesize and speak text. If sentence_streaming is enabled, synthesizes
         and plays sentence-by-sentence for minimal first-audible-speech latency.
         """
-        cleaned = clean_text_for_tts(text)
-        if not cleaned:
-            return
-
-        sentences = split_into_sentences(cleaned)
-        if not sentences:
-            sentences = [cleaned]
+        if sentences is None:
+            # sentences, when given, are already cleaned and may still be
+            # arriving (core/speech_stream.py)
+            cleaned = clean_text_for_tts(text)
+            if not cleaned:
+                return
+            sentences = split_into_sentences(cleaned) or [cleaned]
 
         epoch = self._epoch
         if self._cancelled(epoch, context):
