@@ -36,6 +36,9 @@ stt:
                                    # wakes on unaddressed speech 1/200 (6/200), ~95 ms per clip (~70 ms).
                                    # About 1 GB of GPU memory. small.en still works on a CPU-only box.
   hint_style: "lead_in"            # lead_in (names as a sentence Whisper reads first) or hotwords
+  name_check_model: "small.en"     # Listens again when the main model heard no name; empty turns it off.
+                                   # 160 synthetic commands: turbo alone routed 153 right, small.en alone
+                                   # 158, together 159; LibriSpeech word errors 6.0%, false wakes 3/200
   device: "auto"                   # auto, cuda, or cpu
   compute_type: "int8"             # int8 works on CPU and CUDA; float16 measured no faster
   beam_size: 5

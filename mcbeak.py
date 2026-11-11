@@ -131,6 +131,23 @@ def whisper_lead_in(config: dict) -> str:
     return f"{hint_words(config)}. {', '.join(calls)}."
 
 
+def second_opinion(text: str, match, audio, name_stt, matcher, active_target=None):
+    """When the main model heard no assistant name, let the name-check model
+    (small.en, steadier on a short leading name) listen once more. Its version
+    is taken only when it starts with a configured wake phrase exactly, so a
+    near-homophone mid-sentence ("Mr. Gurr" heard as "Mr. Grok") does not wake
+    anyone. Returns (text, match)."""
+    if match.detected or name_stt is None:
+        return text, match
+    other, _ = name_stt.transcribe(audio)
+    retry = matcher.match(other, active_target=active_target)
+    words = " ".join(re.sub(r"[^a-z ]", " ", other.lower()).split())
+    if retry.detected and retry.similarity >= 1.0 and words.startswith(retry.matched_phrase or "\0"):
+        logger.info(f"Name check heard {other!r} (main model: {text!r})")
+        return other, retry
+    return text, match
+
+
 def print_banner(config: dict, adapters: dict, default_assistant: str):
     """Who answers to what, in which voice and with which permissions."""
     rows = []
@@ -204,6 +221,21 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         lead_in=whisper_lead_in(config),
     )
     stt.load_model()
+    # A second, smaller model listens again only when the main one heard no
+    # assistant name (large-v3-turbo sometimes drops a short leading "Claude,")
+    name_stt = None
+    if stt_cfg.get("name_check_model") and stt_cfg.get("name_check_model") != stt_cfg.get("model_size"):
+        name_stt = STTEngine(
+            model_size=stt_cfg["name_check_model"],
+            device=stt_cfg.get("device", "auto"),
+            compute_type=stt_cfg.get("compute_type", "int8"),
+            beam_size=stt_cfg.get("beam_size", 5),
+            vad_filter=stt_cfg.get("vad_filter", True),
+            hint_words=hint_words(config),
+            language=stt_cfg.get("language", "en"),
+            lead_in=whisper_lead_in(config),
+        )
+        name_stt.load_model()
 
     tts = TTSEngine(
         models_dir=tts_cfg.get("models_dir", "models/piper"),
@@ -253,6 +285,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             # Check wake word & active context
             active_target = state_mgr.active_assistant if state_mgr.is_in_active_window() else None
             match = matcher.match(text, active_target=active_target)
+            text, match = second_opinion(text, match, audio_data, name_stt, matcher, active_target)
 
             if not match.detected:
                 logger.debug("No wake-word or active session detected. Discarding.")
