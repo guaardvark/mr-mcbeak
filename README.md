@@ -62,6 +62,16 @@ Cursor ask mode, Grok with write, edit and shell tools denied). Set
 `permissions: full` on an assistant in `config.yaml` to let voice commands edit
 files or run commands. Remember the microphone hears everyone in the room.
 
+With `permissions: full`, Claude Code runs in its auto mode: ordinary work goes
+ahead, and its own classifier blocks destructive actions. Commands on the
+assistant's `confirm_first` list (by default `git push`, `git reset --hard`,
+`git clean`, `git checkout --`, `git restore`, `git branch -D`, `git stash drop`,
+`git rm`, `rm` and `sudo`) are held as well. When something is held, Mr. McBeak
+asks out loud, for example "Claude Code wants to run rm notes.txt. Should it go
+ahead?". A spoken yes ("yes", "go ahead", "do it") re-runs the same session with
+exactly that command allowed; "no" drops it; anything else is taken as a new
+request.
+
 ## Telemetry
 
 Speech recognition (faster-whisper) and the voices (Piper) run on this machine.

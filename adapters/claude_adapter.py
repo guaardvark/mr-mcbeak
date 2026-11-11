@@ -8,8 +8,19 @@ import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from adapters.base_adapter import BaseAdapter
+from core.approval import rule_prefix, subcommands
 
 logger = logging.getLogger(__name__)
+
+# With full permissions a voice turn runs in Claude Code's auto mode: ordinary
+# work goes ahead and its classifier blocks destructive actions. These are held
+# for a spoken yes as well (auto mode allows pushing to the working repository,
+# and a misheard sentence should not delete or rewrite anything unasked).
+CONFIRM_FIRST = [
+    "Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(git clean:*)",
+    "Bash(git checkout --:*)", "Bash(git restore:*)", "Bash(git branch -D:*)",
+    "Bash(git stash drop:*)", "Bash(git rm:*)", "Bash(rm:*)", "Bash(sudo:*)",
+]
 
 
 class ClaudeAdapter(BaseAdapter):
@@ -27,6 +38,11 @@ class ClaudeAdapter(BaseAdapter):
         # (cloud connectors plus a local Guaardvark server) added ~1.5 s and ~$0.05
         # to every turn; with "none" a short Opus turn took 2.2 s instead of 3.6 s.
         self.mcp = config.get("mcp", "all")
+        self.confirm_first = list(config.get("confirm_first") or CONFIRM_FIRST)
+        # Actions refused on the last turn, as [{"tool", "detail"}], and actions
+        # the user approved by voice for the next one
+        self.last_held = []
+        self.approve_next = []
 
     def _mcp_args(self):
         if self.mcp in (None, "all"):
@@ -47,7 +63,46 @@ class ClaudeAdapter(BaseAdapter):
             args += ["--mcp-config", json.dumps({"mcpServers": chosen})]
         return args
 
+    @staticmethod
+    def _held(raw: str):
+        try:
+            denials = json.loads(raw).get("permission_denials") or []
+        except (ValueError, AttributeError):
+            return []
+        held = []
+        for d in denials:
+            tool_input = d.get("tool_input") or {}
+            detail = tool_input.get("command") or tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+            item = {"tool": d.get("tool_name") or "tool", "detail": str(detail)}
+            if item not in held:
+                held.append(item)
+        return held
+
+    @staticmethod
+    def _approved(rule: str, approved) -> bool:
+        """An ask rule is lifted for the approved run when it covers an approved command."""
+        prefix = rule_prefix(rule)
+        return bool(prefix) and any(
+            sub.startswith(prefix) for a in approved if a["tool"] == "Bash" for sub in subcommands(a["detail"]))
+
+    @staticmethod
+    def _allow_rules(approved):
+        rules = []
+        for a in approved:
+            if a["tool"] == "Bash":
+                rules.append(f"Bash({a['detail']})")
+            elif a["detail"]:
+                rules.append(f"{a['tool']}({a['detail']})")
+            else:
+                rules.append(a["tool"])
+        return rules
+
+    def reset_session(self):
+        super().reset_session()
+        self.last_held, self.approve_next = [], []
+
     def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
+        self.last_held = []
         if not prompt or not prompt.strip():
             return "Yes, how can I help you?"
 
@@ -58,13 +113,25 @@ class ClaudeAdapter(BaseAdapter):
             cmd += ["--model", self.model]
         if self.effort:
             cmd += ["--effort", str(self.effort)]
+        approved, self.approve_next = self.approve_next, []
         if self.readonly:
             cmd += ["--permission-mode", "plan"]
+        else:
+            # Before 2026-11-10 "full" passed no mode, and `claude -p` without one
+            # refuses every edit and command (Manual mode), so voice turns were
+            # read-only in practice
+            cmd += ["--permission-mode", "auto"]
+            asks = [r for r in self.confirm_first if not self._approved(r, approved)]
+            if asks:
+                cmd += ["--settings", json.dumps({"permissions": {"ask": asks}})]
+            if approved:
+                cmd += ["--allowedTools", *self._allow_rules(approved)]
         if self.session_id:
             cmd += ["--resume", self.session_id]
         cmd += self._mcp_args()
 
         raw = self.run_subprocess(cmd, cwd=cwd, context=context)
+        self.last_held = self._held(raw)
         text, session = self.parse_json_reply(raw, ("result",), ("session_id",))
         if session:
             self.session_id = session

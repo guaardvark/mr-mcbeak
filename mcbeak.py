@@ -32,6 +32,7 @@ from core.state_manager import StateManager
 from core.conversation import Conversation
 from core.turn_context import TurnContext
 from core.thinking_cue import start_thinking_cue
+from core import approval
 from core.council import build_prompt, run_council
 from core.single_instance import InstanceLock, describe, other_copies, stop_copies
 from adapters.dispatcher import AdapterDispatcher
@@ -249,6 +250,8 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
     shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
     continuation_s = float(audio_cfg.get("continuation_seconds", 4.0))
+    # Actions an assistant was held back from, waiting for a spoken yes
+    held = approval.HeldActions()
 
     def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False, context=None):
         if context and context.cancelled.is_set():
@@ -302,6 +305,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 prompt = ""
 
             if conversation.control(prompt, target):
+                held.drop(target)
                 show_note(f'"{prompt}"')
                 return
 
@@ -316,12 +320,29 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 logger.info(f"{target} listening (30s follow-up window, no spoken ack)")
                 return
 
+            # An answer to "Should it go ahead?" re-runs the held actions or drops
+            # them; anything else is a new request and the question lapses
+            approving = []
+            if held.pending(target):
+                said = approval.answer(prompt)
+                actions = held.take(target)
+                if said is False:
+                    show_you(shown_name, prompt)
+                    adapter = dispatcher.adapters.get(target)
+                    show_reply(shown_name, "Okay, I won't.")
+                    conversation.submit(TurnContext(), lambda ctx: conversation.speak(
+                        "Okay, I won't.", adapter.voice_file, adapter.voice_speaker, ctx))
+                    return
+                if said is True and actions:
+                    approving = actions
+                    logger.info(f"Approved by voice ({target}): {actions}")
+
             # Words that carry on the last question join it: said while the assistant
             # was still working, or within a few seconds of the last word and before
             # the reply had been spoken in full (a pause, not a new question)
             span = recorder.last_speech_span or (None, None)
             earlier, how = None, ""
-            if not use_tmux:
+            if not use_tmux and not approving:
                 earlier, how = conversation.unanswered(target), "added while it was thinking"
                 if not earlier:
                     earlier = conversation.continuation_of(target, span[0], continuation_s)
@@ -366,8 +387,19 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                         transcript = state_mgr.recent_transcript(shared_turns, exclude_assistant=target, names=display_names)
                         full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
                                                    list(display_names.values()))
+                        adapter = dispatcher.adapters.get(target)
+                        if approving and adapter is not None:
+                            adapter.approve_next = approving
                         response, voice_file, speaker_id = dispatcher.dispatch(target, full_prompt, context=context)
                         stop_cue()
+                        waiting = list(getattr(adapter, "last_held", None) or [])
+                        if waiting and not context.cancelled.is_set():
+                            held.hold(target, waiting)
+                            logger.info(f"Held for a spoken yes ({target}): {waiting}")
+                            for action in waiting:
+                                show_note(f"held for your yes: {action['tool']} {action['detail']}")
+                            what = approval.describe(waiting, getattr(adapter, "confirm_first", []))
+                            response = f"{display_names.get(target, target)} wants to {what}. Should it go ahead?"
                         if conversation.record_turn(target, prompt, response, context):
                             speak_reply(target, response, voice_file, speaker_id, context=context)
                 except Exception:
