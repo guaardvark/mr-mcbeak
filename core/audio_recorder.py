@@ -103,6 +103,13 @@ class AudioRecorder:
         now = time.monotonic()
 
         tts_playing = bool(self.tts_engine and self.tts_engine.is_playing)
+        if tts_playing and self._is_speaking and not self._barge_active:
+            # A reply started while the user was still talking (a pause, then
+            # more words): stop it and keep everything said so far, instead of
+            # treating the rest as echo and losing the start of the sentence
+            logger.info("Reply started while you were still talking; stopping it.")
+            self._barge_active = True
+            self._interrupt.set()
         if self._tts_was_playing and not tts_playing and not self._barge_active:
             # Drop speaker-tail / BT sidetone so Whisper doesn't hallucinate "you"
             self._ignore_until = now + 0.4
@@ -168,7 +175,7 @@ class AudioRecorder:
                 silence_duration >= self.silence_duration_ms
             )
             if self.turn_detector is not None and speech_duration >= self.min_speech_duration_ms:
-                pause_detected = self._turn_over(silence_duration)
+                pause_detected = self._turn_over(silence_duration, self._consecutive_silence_frames)
 
             # Condition 2: Max duration limit reached
             max_limit_reached = (speech_duration / 1000.0) >= self.max_utterance_seconds
@@ -177,7 +184,7 @@ class AudioRecorder:
                 logger.debug(f"Utterance complete (duration={speech_duration:.0f}ms, pause={silence_duration:.0f}ms).")
                 self._emit_utterance()
 
-    def _turn_over(self, silence_ms: float) -> bool:
+    def _turn_over(self, silence_ms: float, quiet_frames: int) -> bool:
         """End of turn by the model's verdict on this pause, or the long-silence fallback."""
         pause = self._last_speech_time
         if silence_ms >= self.max_silence_ms:
@@ -185,7 +192,10 @@ class AudioRecorder:
             p = f", p={verdict[1]:.2f}" if verdict[0] == pause else ""
             logger.info(f"End of turn after a {silence_ms / 1000:.1f}s pause (sounded unfinished{p})")
             return True
-        if silence_ms < self.turn_check_ms:
+        # Counted in 50 ms frames, not wall-clock time, so the model always gets
+        # the same audio for the same pause (one frame more or less moved
+        # borderline verdicts across the threshold)
+        if quiet_frames < max(1, self.turn_check_ms // 50):
             return False
         if self._turn_asked_for != pause:
             self._turn_asked_for = pause
