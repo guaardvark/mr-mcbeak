@@ -67,6 +67,16 @@ def doctor(config):
         turn_detector.TurnDetector(path)
         return path.name
     check("end-of-turn model", turn_model)
+
+    def tone_model():
+        from core import emotion
+        if not (config.get("emotion") or {}).get("enabled"):
+            return "off (emotion.enabled)"
+        path = emotion.model_path(Path(__file__).resolve().parent.parent / "models" / "emotion")
+        if not path.exists():
+            raise ValueError(f"missing {path}; run ./setup.sh")
+        return path.name
+    check("tone-of-voice model", tone_model)
     tts_cfg = config.get("tts", {})
     tts = TTSEngine(models_dir=tts_cfg.get("models_dir", "models/piper"),
                     extra_model_dirs=tts_cfg.get("extra_model_dirs", []))

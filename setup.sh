@@ -88,11 +88,27 @@ for f in kokoro-v1.0.onnx voices-v1.0.bin; do
     fi
 done
 
-# 5. Create Symlink in ~/.local/bin
+# 5. Tone-of-voice model (emotion2vec+ large, FunASR Model License 1.1, ~650 MB),
+#    used when emotion.enabled is true in config.yaml
+MCBEAK_DIR="$SCRIPT_DIR" "$VENV_DIR/bin/python" - <<'PY'
+import os, sys
+root = os.environ["MCBEAK_DIR"]
+sys.path.insert(0, root)
+from core.privacy import disable_telemetry
+disable_telemetry()
+import yaml
+from core import emotion
+if (yaml.safe_load(open(os.path.join(root, "config.yaml"))).get("emotion") or {}).get("enabled"):
+    folder = os.path.join(root, "models", "emotion")
+    path = emotion.model_path(folder)
+    print(f"   • tone model {'present' if path.exists() else 'downloaded'}: {path if path.exists() else emotion.download_model(folder)}")
+PY
+
+# 6. Create Symlink in ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/mcbeak"
 
-# 6. Verify AI Assistant CLIs
+# 7. Verify AI Assistant CLIs
 echo "🤖 Verifying AI Assistant CLIs..."
 for cli in claude grok agy agent guaardvark; do
     if command -v "$cli" >/dev/null 2>&1; then
@@ -102,7 +118,7 @@ for cli in claude grok agy agent guaardvark; do
     fi
 done
 
-# 7. Run Verification Unit Tests
+# 8. Run Verification Unit Tests
 echo "🧪 Running unit tests..."
 "$VENV_DIR/bin/python" -m unittest discover "$SCRIPT_DIR/tests"
 

@@ -16,8 +16,10 @@ SPOKEN_HINT = (
 
 
 def build_prompt(prompt: str, assistant_id: str, display_name: str, transcript: str,
-                 participants: List[str], council: bool = False, max_sentences: int = 3) -> str:
-    """Wrap the user's words with the spoken-reply hint and the shared transcript."""
+                 participants: List[str], council: bool = False, max_sentences: int = 3,
+                 tone: str = "") -> str:
+    """Wrap the user's words with the spoken-reply hint, the shared transcript
+    and, when the tone model heard something clear, a note on the tone of voice."""
     parts = []
     if council:
         others = ", ".join(p for p in participants if p != display_name) or "nobody else"
@@ -28,6 +30,9 @@ def build_prompt(prompt: str, assistant_id: str, display_name: str, transcript: 
         )
     else:
         parts.append(SPOKEN_HINT)
+    if tone:
+        parts.append(f"(Tone of voice, read from the audio by a local model and sometimes wrong: the user {tone}. "
+                     "Let it shape your manner; do not mention it unless asked.)\n")
     if transcript:
         parts.append("Recent conversation (other participants; your own turns are in your session):\n"
                      f"{transcript}\n")
@@ -45,6 +50,7 @@ def run_council(
     context=None,
     reply_order: str = "completion",
     on_reply: Optional[Callable[[str, str, str, int], None]] = None,
+    tone: str = "",
 ) -> List[Tuple[str, str]]:
     """
     Ask every member the same question. Return replies in playback order.
@@ -59,6 +65,7 @@ def run_council(
         full = build_prompt(
             prompt, member, display_names.get(member, member.title()),
             snapshots[member] if parallel else transcript_for(member), names, council=True, max_sentences=2,
+            tone=tone,
         )
         try:
             if context and context.cancelled.is_set():

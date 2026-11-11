@@ -53,6 +53,14 @@ includes what was heard and stays on this machine.
 - Claude's replies start playing as soon as the first sentence is written
   (`system.speak_early`); with Opus that was about 0.8 s sooner on a
   three-sentence answer. One-sentence answers play when they are complete.
+- Tone of voice (`emotion.enabled`): a local model (emotion2vec+ large, about
+  70 ms on the CPU, alongside transcription) listens to how you said it. A clear
+  reading goes to the assistant with your words as a hint, such as "sounds
+  annoyed or angry", and shows on screen next to what you said; neutral or
+  unclear speech adds nothing. On the CREMA-D test set (actors, 1,117 clips) at
+  the default threshold, 82% of emotional clips got the right hint and 7% of
+  neutral ones got a hint. The hint leaves the machine with the words, which is
+  why it is a switch.
 - While an assistant works, a soft two-note pulse plays every few seconds
   (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the
@@ -106,6 +114,18 @@ more natural and Whisper understood it slightly better (65 of 67 words against
 synthesize on the CPU against 0.17 s. Clear male Kokoro voices: am_michael,
 am_adam, am_echo, am_eric, am_liam, am_onyx, and British bm_george, bm_lewis,
 bm_daniel, bm_fable. `mcbeak --test-voice` plays each assistant's voice.
+
+## Models
+
+All run on this machine; `./setup.sh` fetches them once, at pinned versions.
+
+| Use | Model | Source | License |
+|---|---|---|---|
+| Speech recognition | Whisper large-v3-turbo, small.en (CTranslate2) | OpenAI; mobiuslabsgmbh and Systran conversions | MIT |
+| End of turn | Smart Turn v3.2 | pipecat-ai/smart-turn-v3 | BSD-2-Clause |
+| Tone of voice | emotion2vec+ large (Ma et al., 2024), ONNX export | emotion2vec/emotion2vec_plus_large; Voldorn/emotion2vec-plus-large-onnx | FunASR Model Open Source License 1.1 |
+| Voices | Kokoro v1.0 | hexgrad/Kokoro-82M via kokoro-onnx | Apache-2.0 |
+| Voices | Piper LibriTTS, Ryan | rhasspy/piper-voices | see each voice's model card |
 
 ## Tests
 

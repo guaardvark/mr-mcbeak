@@ -29,6 +29,13 @@ audio:
   continuation_seconds: 4          # Speech this soon after your last word, before the reply was fully spoken, continues the same question
   barge_in_enabled: true           # Interrupt assistant when user speaks
 
+emotion:
+  enabled: true                    # Tone of voice from the audio (emotion2vec+ large, local CPU, ~70 ms, run
+                                   # alongside transcription). A clear non-neutral reading goes to the assistant
+                                   # with your words as a hint, e.g. "sounds annoyed or angry", and shows on screen.
+  threshold: 0.8                   # CREMA-D test (actors, 1117 clips): 82% of emotional clips got the right hint,
+                                   # 7% of neutral ones a hint; 0.6 gave 85% and 9%
+
 stt:
   engine: "faster_whisper"         # faster_whisper
   model_size: "large-v3-turbo"     # Measured 2026-11-10 on the GPU, int8, names as a lead-in sentence:

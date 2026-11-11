@@ -265,6 +265,17 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     held = approval.HeldActions()
     # Start speaking a reply's first sentence while the rest is still being written
     speak_early = bool(system_cfg.get("speak_early", True))
+    # Tone of voice from the audio, read alongside transcription (core/emotion.py)
+    emotion_cfg = config.get("emotion") or {}
+    tone_detector, tone_pool = None, None
+    if emotion_cfg.get("enabled"):
+        from concurrent.futures import ThreadPoolExecutor
+        from core import emotion
+        try:
+            tone_detector = emotion.load(PROJECT_ROOT / "models" / "emotion", float(emotion_cfg.get("threshold", 0.8)))
+            tone_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tone")
+        except Exception as err:
+            logger.error(f"Tone model failed to load ({err}); tone of voice is off")
 
     def speak_reply(member: str, reply: str, voice_file: str, speaker_id: int, announce: bool = False, context=None):
         if context and context.cancelled.is_set():
@@ -291,6 +302,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         try:
             # Transcribe
             context = TurnContext(started_at=recorder.last_captured_at or time.monotonic())
+            tone_future = tone_pool.submit(tone_detector.note, audio_data) if tone_detector else None
             text, dur = stt.transcribe(audio_data)
             context.timing("transcription")
             if not text or len(text.strip()) < 2 or is_whisper_hallucination(text):
@@ -360,12 +372,18 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                 if not earlier:
                     earlier = conversation.continuation_of(target, span[0], continuation_s)
                     how = "carried on after a pause"
+            tone = ""
+            if tone_future is not None:
+                try:
+                    tone = tone_future.result(timeout=2.0) or ""
+                except Exception as err:
+                    logger.warning(f"Tone check skipped: {err}")
             if earlier:
                 prompt = f"{earlier} {prompt}"
                 logger.info(f"Joining with the previous question for {target} ({how})")
-                show_you(shown_name, prompt, how)
+                show_you(shown_name, prompt, ", ".join(x for x in (how, tone) if x))
             else:
-                show_you(shown_name, prompt)
+                show_you(shown_name, prompt, tone)
 
             def execute_turn(context):
                 # Soft pulse while the assistant works (first after 1.5 s), so a long
@@ -390,6 +408,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                             prompt, council_members, display_names, dispatcher.dispatch, transcript_for,
                             parallel=bool(council_cfg.get("parallel", True)), context=context,
                             reply_order=council_cfg.get("reply_order", "completion"), on_reply=on_reply,
+                            tone=tone,
                         )
                     elif use_tmux:
                         sent = tmux.send_prompt(target, prompt)
@@ -399,7 +418,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                     else:
                         transcript = state_mgr.recent_transcript(shared_turns, exclude_assistant=target, names=display_names)
                         full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
-                                                   list(display_names.values()))
+                                                   list(display_names.values()), tone=tone)
                         adapter = dispatcher.adapters.get(target)
                         if approving and adapter is not None:
                             adapter.approve_next = approving
