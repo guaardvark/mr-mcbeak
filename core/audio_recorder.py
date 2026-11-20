@@ -38,10 +38,18 @@ class AudioRecorder:
         turn_check_ms: int = 500,
         turn_threshold: float = 0.7,
         max_silence_ms: int = 3000,
+        speech_gate: Optional[Any] = None,
+        echo_guard: Optional[Any] = None,
     ):
         if sample_rate != 16000:
             raise ValueError("Audio capture requires sample_rate: 16000; resampling is not supported.")
         self.barge_in_enabled = barge_in_enabled
+        # What counts as speech in a frame (core/speech_gate.py): loudness by
+        # default, Silero VAD when the app passes one. The guard raises the bar
+        # for talking over a reply above the speakers' own echo.
+        from core.speech_gate import EchoGuard, EnergyGate
+        self.speech_gate = speech_gate or EnergyGate(silence_threshold)
+        self.echo_guard = echo_guard or EchoGuard(base=silence_threshold)
         self.last_captured_at = None
         # (first speech, last speech) of the utterance being handled, monotonic seconds
         self.last_speech_span = None
@@ -101,6 +109,9 @@ class AudioRecorder:
         chunk = indata[:, 0].copy()  # Mono float32 array
         rms = np.sqrt(np.mean(chunk**2))
         now = time.monotonic()
+        # Asked for every frame, also the ones dropped below, so the detector
+        # hears the audio without gaps
+        voiced = self.speech_gate(chunk, rms, self._is_speaking)
 
         tts_playing = bool(self.tts_engine and self.tts_engine.is_playing)
         if tts_playing and self._is_speaking and not self._barge_active:
@@ -127,7 +138,9 @@ class AudioRecorder:
         if tts_playing and not self._barge_active:
             self._history.clear()
             self._preroll.append(chunk)
-            if rms > self.silence_threshold:
+            loud_enough = rms > self.echo_guard.level()
+            self.echo_guard.heard_playback(rms)
+            if voiced and loud_enough:
                 self._consecutive_speech_frames += 1
                 if self._consecutive_speech_frames >= 3:
                     logger.info("Barge-in detected! Stopping assistant speech.")
@@ -144,7 +157,7 @@ class AudioRecorder:
                 return  # Discard self-echo while the assistant is still talking
 
         # Normal speech detection
-        if rms > self.silence_threshold:
+        if voiced:
             self._consecutive_speech_frames += 1
             self._consecutive_silence_frames = 0
             self._last_speech_time = now

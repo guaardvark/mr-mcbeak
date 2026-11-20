@@ -15,6 +15,7 @@ mcbeak --verbose      # same, with the technical log lines in the terminal too
 mcbeak --replace      # stop the copy already listening and start this one
 mcbeak --stop         # stop the copy that is listening
 mcbeak --test-voice   # hear every assistant's voice
+mcbeak --mic-check    # measure room noise, the reply's echo and your voice
 mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
 mcbeak --cli team "which database should we use"   # ask everyone
 mcbeak team           # who is on the team
@@ -98,6 +99,13 @@ Speaking to it by name tries it again, and one good answer puts it back.
   in their own voices. Parallel replies share prior context; sequential replies
   also see earlier answers from the current round.
 - For 30 seconds after a reply you can keep talking without a wake word.
+- What counts as speech in the live microphone is decided by Silero VAD
+  (`audio.vad: silero`, the model faster-whisper ships, about 0.04 ms per
+  32 ms of audio on one CPU thread) instead of a loudness level. LibriSpeech
+  clips played into the recorder at a level of 0.006, below the old fixed
+  level of 0.015, were captured 40 of 40 times against 0 of 40; synthetic door
+  thumps started no recording against 3 in 20 seconds. `audio.vad: energy`
+  brings the loudness level back.
 - When you stop talking, a small local model (Smart Turn v3.2, CPU, about 20 ms)
   judges from how your last words sounded whether you finished. A finished
   question goes out half a second after your last word; when you sound
@@ -219,8 +227,18 @@ CLI process groups are terminated. A Guaardvark request already in progress is
 abandoned at once, so the next question is not kept waiting, and its late
 response is discarded; an Ollama reply stops generating. Backend
 turns are serialized while transcription remains available for local controls.
-Headphones are still advised: energy-based barge-in cannot distinguish speaker
-output from your voice as reliably as acoustic echo cancellation.
+Talking over a reply has to beat the reply's own echo. The app knows what it
+is playing, learns from the first half second of playback how much of it
+comes back into the microphone, and asks a voice to be `audio.echo_margin`
+(2) times louder than the echo expected at that moment. In simulation
+(replies echoed 120 ms late with a 150 ms room tail, 20 runs per level) no
+reply interrupted itself with the echo between 0.006 and 0.04, where the old
+fixed level interrupted every reply from 0.012 up, and a voice at 0.06 was
+heard over the echo in 18 to 20 of 20 runs. This is a level comparison, not
+echo cancellation: a quiet voice under loud speakers is still missed, and
+headphones remove the problem. `mcbeak --mic-check` measures your room: the
+noise floor, the echo of a spoken reply, your voice, and whether your voice
+clears the bar.
 
 Council requests run in parallel by default, using a snapshot of prior context.
 `council.reply_order: completion` speaks ready replies first; set `member` to

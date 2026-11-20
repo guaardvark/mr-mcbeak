@@ -7,6 +7,7 @@ import time
 import queue
 import logging
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -55,6 +56,9 @@ class TTSEngine:
         self._output_lock = threading.Lock()
         self._epoch_lock = threading.Lock()
         self._epoch = 0
+        # (time, level) of the last blocks handed to the speakers, for the
+        # recorder's echo guard
+        self._output_levels = deque(maxlen=64)
 
     def get_or_load_voice(self, model_filename: str) -> Any:
         """Load and cache a Piper voice model with automatic fallback search."""
@@ -132,8 +136,16 @@ class TTSEngine:
         for start in range(0, len(audio), block):
             if self._cancelled(epoch, context):
                 return False
-            stream.write(audio[start:start + block])
+            piece = audio[start:start + block]
+            self._output_levels.append((time.monotonic(), float(np.sqrt(np.mean(piece ** 2))) if len(piece) else 0.0))
+            stream.write(piece)
         return True
+
+    def recent_output_level(self, seconds: float = 0.6) -> float:
+        """Loudest 50 ms block sent to the speakers in the last `seconds`: long
+        enough to cover the output delay and the room's own tail."""
+        since = time.monotonic() - seconds
+        return max((level for at, level in list(self._output_levels) if at >= since), default=0.0)
 
     @staticmethod
     def _close(stream, drain: bool):

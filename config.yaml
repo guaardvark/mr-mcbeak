@@ -17,7 +17,16 @@ system:
 audio:
   sample_rate: 16000
   channels: 1
-  silence_threshold: 0.015         # Energy threshold for speech detection
+  vad: silero                      # What counts as speech in the live microphone: silero (Silero VAD v6, the
+                                   # model faster-whisper ships; judges the sound, not its loudness) or energy
+                                   # (louder than silence_threshold). LibriSpeech clips played into the recorder
+                                   # 2026-11-19: speech at a level of 0.006 was caught 40 of 40 times with
+                                   # silero and 0 of 40 with energy; door thumps started 0 recordings against 3
+  vad_threshold: 0.5               # How sure silero must be that a frame is speech
+  silence_threshold: 0.015         # Loudness that counts as speech with vad: energy, and the least a voice
+                                   # must reach to talk over a reply
+  echo_margin: 2.0                 # Talking over a reply must be this many times louder than the echo of the
+                                   # reply expected at the microphone (learned from what is being played)
   silence_duration_ms: 1800        # Silence that ends an utterance when the end-of-turn model is off or missing
   turn_detection: true             # Smart Turn v3.2 (local, CPU) decides from how a pause sounds whether you finished
   turn_check_ms: 500               # Pause after which the model is asked

@@ -670,7 +670,13 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
             turn_detector = td.load(PROJECT_ROOT / "models" / "smart-turn")
         except Exception as err:
             logger.error(f"End-of-turn model failed to load ({err}); using silence timing only")
+    from core import speech_gate
+    silence_threshold = float(audio_cfg.get("silence_threshold", 0.015))
     recorder = AudioRecorder(
+        speech_gate=speech_gate.load(audio_cfg.get("vad", "silero"), silence_threshold,
+                                     float(audio_cfg.get("vad_threshold", 0.5))),
+        echo_guard=speech_gate.EchoGuard(silence_threshold, float(audio_cfg.get("echo_margin", 2.0)),
+                                         tts.recent_output_level),
         sample_rate=audio_cfg.get("sample_rate", 16000),
         channels=audio_cfg.get("channels", 1),
         silence_threshold=audio_cfg.get("silence_threshold", 0.015),
@@ -810,6 +816,98 @@ def stop_listener(config: dict) -> int:
     return 0
 
 
+def mic_check(config: dict) -> int:
+    """Measure the room: how quiet it is, how much of a reply comes back into
+    the microphone, and how loud the user's voice arrives. Nothing is sent
+    anywhere and no assistant is asked anything."""
+    import numpy as np
+    import sounddevice as sd
+    from core import speech_gate
+    if other_copies():
+        print(f"{app_name(config)} is listening; stop it first (mcbeak --stop), or it will hear the test.", file=sys.stderr)
+        return 1
+    audio_cfg, tts_cfg = config.get("audio") or {}, config.get("tts") or {}
+    base = float(audio_cfg.get("silence_threshold", 0.015))
+    margin = float(audio_cfg.get("echo_margin", 2.0))
+    tts = TTSEngine(models_dir=tts_cfg.get("models_dir", "models/piper"),
+                    playback_speed=float(tts_cfg.get("playback_speed", 1.0)),
+                    extra_model_dirs=tts_cfg.get("extra_model_dirs") or [])
+    member = next(iter((config.get("assistants") or {}).values()))
+    tts.get_or_load_voice(member.get("voice", "en_US-ryan-high.onnx"))
+    gate = speech_gate.load("silero")
+    guard = speech_gate.EchoGuard(base, margin, tts.recent_output_level)
+    phase, rows = ["wait"], []
+
+    def heard(indata, frames, time_info, status):
+        chunk = indata[:, 0].copy()
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        voiced = bool(gate(chunk, rms, False))
+        needed = guard.level() if phase[0] == "reply" else base
+        if phase[0] == "reply":
+            guard.heard_playback(rms)
+        rows.append((phase[0], rms, voiced, needed))
+
+    def db(a, b):
+        return 20 * np.log10(max(a, 1e-6) / max(b, 1e-6))
+
+    def run_of(flags, n=3):
+        streak = best = 0
+        for f in flags:
+            streak = streak + 1 if f else 0
+            best = max(best, streak)
+        return best >= n
+
+    with sd.InputStream(samplerate=16000, channels=1, dtype="float32", blocksize=800, callback=heard):
+        time.sleep(0.5)
+        print("\n1/3  Stay quiet for three seconds ...", flush=True)
+        phase[0] = "room"
+        time.sleep(3.0)
+        print("2/3  A reply is playing; stay quiet ...", flush=True)
+        phase[0] = "reply"
+        tts.speak("This is how a reply sounds at the microphone. The speakers reach it too, "
+                  "so I am measuring how much of my own voice comes back.",
+                  voice_file=member.get("voice", "en_US-ryan-high.onnx"), speaker_id=int(member.get("voice_speaker", 0)))
+        phase[0] = "wait"
+        time.sleep(0.6)
+        print(f'3/3  Now say, as you normally would: "{app_name(config)}, can you hear me?"  (five seconds)', flush=True)
+        phase[0] = "voice"
+        time.sleep(5.0)
+        phase[0] = "wait"
+
+    room = [r for r in rows if r[0] == "room"]
+    reply = [r for r in rows if r[0] == "reply"]
+    voice = [r for r in rows if r[0] == "voice" and r[2]]
+    if not room or not reply:
+        print("No audio arrived from the microphone.", file=sys.stderr)
+        return 1
+    floor = float(np.median([r[1] for r in room]))
+    echo = float(np.percentile([r[1] for r in reply], 95))
+    print(f"\n  Room         level {floor:.4f}; {sum(r[2] for r in room)} of {len(room)} frames sounded like speech")
+    if max(r[1] for r in rows) < 0.001:
+        print("               The microphone is delivering almost nothing. Check that it is the right one,\n"
+              "               not muted, and that its input volume is not at zero.")
+    print(f"  Reply echo   level {echo:.4f} at its loudest ({db(echo, floor):+.0f} dB over the room); "
+          f"{sum(r[2] for r in reply)} of {len(reply)} frames sounded like speech")
+    old = run_of([r[1] > base for r in reply])
+    new = run_of([r[2] and r[1] > r[3] for r in reply])
+    print(f"  Fixed level  ({base}): the reply {'WOULD interrupt itself' if old else 'would not interrupt itself'}")
+    print(f"  Echo guard   (margin {margin}): the reply {'WOULD interrupt itself' if new else 'would not interrupt itself'}"
+          + (f"; learned echo gain {guard.gain:.3f}" if guard.gain is not None else ""))
+    need = float(np.median([r[3] for r in reply if np.isfinite(r[3])] or [base]))
+    if not voice:
+        print("  Your voice   nothing that sounded like speech was heard in the five seconds")
+        print(f"               To talk over a reply at this volume a voice must reach about {need:.4f} at the microphone.")
+    else:
+        level = float(np.median([r[1] for r in voice]))
+        print(f"  Your voice   level {level:.4f} ({db(level, floor):+.0f} dB over the room, {db(level, echo):+.0f} dB over the echo), "
+              f"{len(voice) * 0.05:.1f} s of speech")
+        print(f"               To talk over a reply at this volume it must reach about {need:.4f}: "
+              + ("it does." if level > need else "it does NOT. Turn the speakers down, move the microphone "
+                 "closer to you, or use headphones."))
+    print()
+    return 0
+
+
 def test_voices(config: dict):
     """Test and preview the voices for all 5 assistants."""
     assistants = config.get("assistants", {})
@@ -934,6 +1032,8 @@ def main():
     parser.add_argument("--replace", action="store_true", help="Stop the copy already listening, then start listening")
     parser.add_argument("--stop", action="store_true", help="Stop the copy that is listening")
     parser.add_argument("--test-voice", action="store_true", help="Preview voices for all assistants")
+    parser.add_argument("--mic-check", action="store_true",
+                        help="Measure room noise, the echo of a reply at the microphone, and your voice")
     parser.add_argument("--cli", nargs=2, metavar=("TARGET", "PROMPT"), help="Direct text execution (e.g. --cli claude 'what is 2+2')")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--verbose", action="store_true", help="Also show the technical log lines in the terminal")
@@ -952,6 +1052,8 @@ def main():
         sys.exit(doctor(config))
     if args.stop:
         sys.exit(stop_listener(config))
+    if args.mic_check:
+        sys.exit(mic_check(config))
     if args.test_voice:
         test_voices(config)
     elif args.cli:
