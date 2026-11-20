@@ -13,45 +13,91 @@ from adapters.agy_adapter import AntigravityAdapter
 from adapters.cursor_adapter import CursorAdapter
 from adapters.guaardvark_adapter import GuaardvarkAdapter
 from adapters.codex_adapter import CodexAdapter
+from adapters.ollama_adapter import OllamaAdapter
 
 logger = logging.getLogger(__name__)
 
 
+ADAPTER_CLASSES = {
+    "claude": ClaudeAdapter,
+    "grok": GrokAdapter,
+    "antigravity": AntigravityAdapter,
+    "agy": AntigravityAdapter,
+    "cursor": CursorAdapter,
+    "guaardvark": GuaardvarkAdapter,
+    "codex": CodexAdapter,
+    "ollama": OllamaAdapter,
+}
+
+
 class AdapterDispatcher:
     """
-    Registry and router for all assistant adapters.
+    Registry and router for the team's adapters, one per member. A member's
+    kind (`kind`, or the older `target_id`) picks the adapter class, so a team
+    can hold several members of one kind, each with its own conversation.
     """
 
-    def __init__(self, config_assistants: Dict[str, dict]):
+    def __init__(self, config_assistants: Dict[str, dict], sessions=None):
         self._locks = {}
         self.adapters: Dict[str, BaseAdapter] = {}
+        # Optional core.sessions.SessionStore: conversations carry on after a restart
+        self.sessions = sessions
+        self._restored = set()
+        self.update(config_assistants)
 
-        # Map target IDs to adapter classes
-        adapter_classes = {
-            "claude": ClaudeAdapter,
-            "grok": GrokAdapter,
-            "antigravity": AntigravityAdapter,
-            "agy": AntigravityAdapter,
-            "cursor": CursorAdapter,
-            "guaardvark": GuaardvarkAdapter,
-            "codex": CodexAdapter,
-        }
-
+    def update(self, config_assistants: Dict[str, dict]):
+        """Make the registry match the members given. A member whose settings
+        did not change keeps its adapter, and with it its conversation.
+        Returns (added keys, removed keys)."""
+        current = {key: a for key, a in self.adapters.items() if getattr(a, "member_key", None) == key}
+        adapters: Dict[str, BaseAdapter] = {}
+        added = []
         for key, cfg in config_assistants.items():
-            target_id = cfg.get("target_id", key)
-            cls = adapter_classes.get(target_id) or adapter_classes.get(key)
-            if cls:
-                adapter = cls(cfg)
+            kind = cfg.get("kind") or cfg.get("target_id", key)
+            cls = ADAPTER_CLASSES.get(kind) or ADAPTER_CLASSES.get(key)
+            if not cls:
+                logger.warning(f"Team member {key!r} has an unknown kind {kind!r}; left out")
+                continue
+            adapter = current.get(key)
+            if adapter is None or adapter.config != cfg or type(adapter) is not cls:
+                adapter = cls(dict(cfg))
+                adapter.config = cfg
+                adapter.member_key = key
                 self._locks[adapter] = threading.Lock()
-                self.adapters[target_id] = adapter
-                self.adapters[key] = adapter
-                logger.info(f"Registered assistant adapter: {adapter.name} ({target_id})")
+                if self.sessions and self.sessions.restore(key, adapter):
+                    self._restored.add(adapter)
+                added.append(key)
+                logger.info(f"Registered assistant adapter: {adapter.name} ({kind})")
+            adapters[key] = adapter
+        # Older configs name a member by its kind's id as well ("agy"); a member's
+        # own key always wins
+        for key, cfg in config_assistants.items():
+            alias = cfg.get("target_id")
+            if alias and key in adapters:
+                adapters.setdefault(alias, adapters[key])
+        removed = [key for key in current if key not in config_assistants]
+        self.adapters = adapters
+        live = set(adapters.values())
+        self._locks = {a: lock for a, lock in self._locks.items() if a in live}
+        return added, removed
+
+    def members(self):
+        """Each adapter once, in team order."""
+        return list(dict.fromkeys(self.adapters.values()))
 
     def reset_sessions(self, target):
         adapters = (set(self.adapters.values()) if target == "team" else {self.adapters[target]})
         for adapter in adapters:
             with self._locks[adapter]:
                 adapter.reset_session()
+                self._restored.discard(adapter)
+                if self.sessions:
+                    self.sessions.forget(adapter.member_key)
+
+    def _run(self, adapter, prompt, cwd, context, on_text):
+        if on_text and getattr(adapter, "streams", False):
+            return adapter.execute(prompt, cwd=cwd, context=context, on_text=on_text)
+        return adapter.execute(prompt, cwd=cwd, context=context)
 
     def dispatch(self, target_id: str, prompt: str, cwd: Optional[str] = None, context=None,
                  on_text=None) -> Tuple[str, str, int]:
@@ -63,11 +109,7 @@ class AdapterDispatcher:
         adapter = self.adapters.get(target)
 
         if not adapter:
-            # Fallback to claude or first available
-            adapter = self.adapters.get("claude") or next(iter(self.adapters.values()), None)
-
-        if not adapter:
-            return f"No assistant adapter found for target: {target_id}", "en_US-ryan-high.onnx", 0
+            return f"There is no team member called {target_id}.", "en_US-ryan-high.onnx", 0
 
         logger.info(f"Dispatching prompt to [{adapter.name}]: '{prompt[:60]}...'")
         if context and context.cancelled.is_set():
@@ -75,10 +117,17 @@ class AdapterDispatcher:
         with self._locks[adapter]:
             if context and context.cancelled.is_set():
                 return "", adapter.voice_file, adapter.voice_speaker
-            if on_text and getattr(adapter, "streams", False):
-                response = adapter.execute(prompt, cwd=cwd, context=context, on_text=on_text)
-            else:
-                response = adapter.execute(prompt, cwd=cwd, context=context)
+            restored = adapter in self._restored
+            self._restored.discard(adapter)
+            response = self._run(adapter, prompt, cwd, context, on_text)
+            if restored and adapter.last_error and not (context and context.cancelled.is_set()):
+                # The conversation remembered from the last run could not be
+                # picked up (deleted, or from another folder): start a new one
+                logger.info(f"[{adapter.name}] Saved conversation not resumed ({adapter.last_error[:80]}); starting fresh")
+                adapter.reset_session()
+                response = self._run(adapter, prompt, cwd, context, on_text)
+            if self.sessions and not adapter.last_error:
+                self.sessions.save(adapter.member_key, adapter)
         if context:
             context.timing("backend_response")
             if context.cancelled.is_set():

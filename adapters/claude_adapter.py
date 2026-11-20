@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from adapters.base_adapter import BaseAdapter
 from core.approval import rule_prefix, subcommands
+from core.council import SPOKEN_SYSTEM
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ class ClaudeAdapter(BaseAdapter):
 
     # Replies can be spoken while they are being written (execute(on_text=...))
     streams = True
+    # The spoken-reply hint rides as --append-system-prompt, not in each question
+    spoken_system = True
 
     @staticmethod
     def _stream_handler(on_text):
@@ -172,6 +175,8 @@ class ClaudeAdapter(BaseAdapter):
                 cmd += ["--allowedTools", *self._allow_rules(approved)]
         if self.session_id:
             cmd += ["--resume", self.session_id]
+        cmd += ["--append-system-prompt",
+                SPOKEN_SYSTEM.format(name=self.name) + (f" Your role on this team: {self.role}" if self.role else "")]
         cmd += self._mcp_args()
 
         if on_text:

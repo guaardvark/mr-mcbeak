@@ -153,7 +153,7 @@ class CouncilTests(unittest.TestCase):
 class AdapterTests(unittest.TestCase):
     def test_guaardvark_readonly_does_not_contact_backend(self):
         adapter = GuaardvarkAdapter({})
-        with patch('adapters.guaardvark_adapter.requests.post') as post:
+        with patch('requests.post') as post:
             self.assertIn('read-only', adapter.execute('do something'))
             post.assert_not_called()
 
@@ -163,7 +163,7 @@ class AdapterTests(unittest.TestCase):
         def post(*args, **kwargs):
             context.cancel()
             return Mock(status_code=200, json=lambda: {'response': 'late'})
-        with patch('adapters.guaardvark_adapter.requests.post', side_effect=post):
+        with patch('requests.post', side_effect=post):
             self.assertEqual(adapter.execute('hello', context=context), '')
 
     def test_cancelled_dispatch_does_not_execute(self):

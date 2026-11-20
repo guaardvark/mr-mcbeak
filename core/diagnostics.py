@@ -90,6 +90,11 @@ def doctor(config):
         check(f"{adapter.name} workspace", workspace)
 
         def binary(a=adapter):
+            if not getattr(a, "cli_binary", None):
+                reason = a.unavailable()
+                if reason:
+                    raise ValueError(reason)
+                return f"{a.model} at {a.host}"
             if not shutil.which(a.cli_binary):
                 raise ValueError(f"install CLI {a.cli_binary} or set cli_cmd")
             result = subprocess.run([a.cli_binary, "--help"], capture_output=True, text=True, timeout=10)

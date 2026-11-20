@@ -34,9 +34,12 @@ from core.conversation import Conversation
 from core.turn_context import TurnContext
 from core.thinking_cue import start_thinking_cue
 from core import approval
+from core import team
+from core.sessions import SessionStore
 from core.speech_stream import SentenceFeed
 from core.council import build_prompt, run_council
 from core.single_instance import InstanceLock, describe, other_copies, stop_copies
+from core.diagnostics import validate_config
 from adapters.dispatcher import AdapterDispatcher
 from terminal.tmux_bridge import TmuxBridge
 
@@ -116,6 +119,8 @@ def hint_words(config: dict) -> str:
     names = [app_name(config)] if config.get("coordinator_wake_words") else []
     for key, a in (config.get("assistants") or {}).items():
         names += [bare_name(w) for w in (a.get("wake_words") or [key])[:1]]
+    # Assistants that could be asked to join, so "ask Codex to join" is heard right
+    names += list(config.get("known_names") or [])
     return ", ".join(dict.fromkeys(n for n in names if n))
 
 
@@ -151,46 +156,133 @@ def second_opinion(text: str, match, audio, name_stt, matcher, active_target=Non
     return text, match
 
 
-def print_banner(config: dict, adapters: dict, default_assistant: str):
+class Roster:
+    """The team as the listener uses it. Reloaded in place when the team file
+    changes, so the objects handed out here (names, council, dispatcher) stay
+    the same ones."""
+
+    def __init__(self, config: dict, sessions=None):
+        self.dispatcher = AdapterDispatcher({}, sessions=sessions)
+        self.names: dict = {}
+        self.council: list = []
+        # Members sitting out team questions, with the reason (program missing,
+        # not signed in, no answer); speaking to one directly brings it back
+        self.benched: dict = {}
+        self.matcher = None
+        self.load(config)
+
+    def load(self, config: dict):
+        """Returns (added keys, removed keys)."""
+        self.config = config
+        self.members = config.get("assistants") or {}
+        council_cfg = config.get("council") or {}
+        self.matcher = MultiTargetWakeWordMatcher(
+            config_assistants=self.members,
+            coordinator_wake_words=config.get("coordinator_wake_words") or [],
+            council_wake_words=council_cfg.get("wake_words", ["team", "hey team", "everyone", "hey everyone"]),
+            coordinator_variants=config.get("coordinator_variants") or [],
+        )
+        added, removed = self.dispatcher.update(self.members)
+        names = {k: a.get("name", k.title()) for k, a in self.members.items()}
+        for k, a in self.members.items():
+            names.setdefault(a.get("target_id", k), a.get("name", k.title()))
+        self.names.clear()
+        self.names.update(names)
+        self.council[:] = [m for m in (council_cfg.get("members") or list(self.members)) if m in self.dispatcher.adapters]
+        for key in removed:
+            self.benched.pop(key, None)
+        for key in added:
+            self.benched.pop(key, None)
+            reason = self.dispatcher.adapters[key].unavailable()
+            if reason:
+                self.benched[key] = reason
+        return added, removed
+
+    def answering(self) -> list:
+        """Council members who are not sitting out."""
+        return [m for m in self.council if m not in self.benched]
+
+
+_TEAM_WHO = re.compile(r"^(who is|who's|whos) (on|in) the team$|^who(?: is|'s|s)? here$|^who can i talk to$")
+_TEAM_LEAVE = re.compile(r"^(?:remove|drop|take) (.+?) (?:from|off) the team$"
+                         r"|^(?:ask|asks|asked|tell) (.+?) to leave(?: the team)?$")
+_TEAM_JOIN = re.compile(r"^(?:add|invite|bring|ask|asks|asked|get|have) (.+?)"
+                        r"(?: to join(?: the team| us| in)?| join(?: the team| us| in)?| to the team| onto the team| in)$")
+
+
+def team_request(prompt: str):
+    """A spoken request about the team itself: ("who", ""), ("join", name),
+    ("leave", name), or None for anything else."""
+    said = " ".join(re.sub(r"[^a-z0-9' ]", " ", (prompt or "").lower()).split())
+    said = re.sub(r"^(please|can you|could you|would you) ", "", said)
+    said = re.sub(r" please$", "", said)
+    if not said or len(said.split()) > 9:
+        return None
+    if _TEAM_WHO.match(said):
+        return ("who", "")
+    m = _TEAM_LEAVE.match(said)
+    if m:
+        return ("leave", m.group(1) or m.group(2))
+    m = _TEAM_JOIN.match(said)
+    if m:
+        return ("join", m.group(1))
+    return None
+
+
+def spoken_list(items) -> str:
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else "nobody"
+
+
+def print_banner(config: dict, roster: Roster, default_assistant: str):
     """Who answers to what, in which voice and with which permissions."""
+    adapters = roster.dispatcher.adapters
     rows = []
-    for key, a in (config.get("assistants") or {}).items():
-        adapter = adapters.get(a.get("target_id", key)) or adapters.get(key)
+    for key, a in roster.members.items():
+        adapter = adapters.get(key)
         if adapter is None:
             continue
         voice = str(a.get("voice", "")).replace("en_US-", "").replace(".onnx", "")
         if a.get("voice_speaker"):
             voice += f" #{a['voice_speaker']}"
-        if adapter.readonly and not adapter.capabilities["readonly"]:
+        if not getattr(adapter, "cli_binary", None) and adapter.target_id != "guaardvark":
+            mode = "talks only (no tools)"
+        elif adapter.readonly and not adapter.capabilities["readonly"]:
             mode = "off (cannot be read-only)"
         else:
             mode = "read-only" if adapter.readonly else "full"
-        rows.append((f'"{bare_name((a.get("wake_words") or [key])[0])} ..."', adapter.name, voice, mode))
+        if key in roster.benched:
+            mode = f"sitting out: {roster.benched[key]}"
+        goes_to = adapter.name if adapter.name.lower().startswith(adapter.target_id) else f"{adapter.name} ({adapter.target_id})"
+        rows.append((f'"{bare_name((a.get("wake_words") or [key])[0])} ..."', goes_to, voice, mode))
     coordinator = app_name(config) if config.get("coordinator_wake_words") else ""
     default_name = adapters[default_assistant].name if default_assistant in adapters else default_assistant
     width = max(len(r[0]) for r in rows) + 3 if rows else 20
+    wide = max([len(r[1]) for r in rows] + [13]) + 3
     print(f"\n  {app_name(config)}  ·  listening\n")
-    print(f"  {'Say':<{width}}{'Goes to':<16}{'Voice':<22}Permissions")
+    print(f"  {'Say':<{width}}{'Goes to':<{wide}}{'Voice':<22}Permissions")
     for say, name, voice, mode in rows:
-        print(f"  {say:<{width}}{name:<16}{voice:<22}{mode}")
+        print(f"  {say:<{width}}{name:<{wide}}{voice:<22}{mode}")
     if coordinator:
         print(f'  {chr(34) + coordinator + " ..." + chr(34):<{width}}the last assistant you used (first: {default_name})')
     print(f'  {chr(34) + "Hey team ..." + chr(34):<{width}}everyone, in turn')
+    for note in config.get("team_notes") or []:
+        print(f"  {note}")
     print("\n  Keep talking for 30 s without a name. Talk over a reply to stop it.")
     print("  Pausing mid-sentence is fine: carry on within a few seconds and it joins up.")
     print('  Say "stop", "go to sleep", "new conversation" or "repeat that".')
+    asker = coordinator or "Hey team"
+    print(f'  Team: "{asker}, who is on the team?", "{asker}, ask Grok to join", or `mcbeak team` in a terminal.')
     print(f"  Ctrl+C or Ctrl+Z quits. Log: {log_path()}\n")
 
 
-def run_voice_daemon(config: dict, use_tmux: bool = False):
+def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "config.yaml"):
     """Main continuous voice processing loop."""
-    assistants_cfg = config.get("assistants", {})
     audio_cfg = config.get("audio", {})
     stt_cfg = config.get("stt", {})
     tts_cfg = config.get("tts", {})
     system_cfg = config.get("system", {})
 
-    from core.diagnostics import validate_config
     validate_config(config)
     start_file_log()
     logging.getLogger().setLevel(
@@ -204,15 +296,14 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         default_assistant=system_cfg.get("default_assistant", "claude")
     )
     council_cfg = config.get("council", {}) or {}
-    matcher = MultiTargetWakeWordMatcher(
-        config_assistants=assistants_cfg,
-        coordinator_wake_words=config.get("coordinator_wake_words") or [],
-        council_wake_words=council_cfg.get("wake_words", ["team", "hey team", "everyone", "hey everyone"]),
-        coordinator_variants=config.get("coordinator_variants") or [],
-    )
-    display_names = {k: a.get("name", k.title()) for k, a in assistants_cfg.items()}
-    for k, a in assistants_cfg.items():
-        display_names[a.get("target_id", k)] = a.get("name", k.title())
+    sessions = None
+    if system_cfg.get("remember_conversations", True) and not use_tmux:
+        sessions = SessionStore(max_age_hours=float(system_cfg.get("remember_hours", 72)))
+    roster = Roster(config, sessions)
+    display_names = roster.names
+    # The kinds of assistant config.yaml describes, to recognise a spoken
+    # "ask Grok to join" (with the same mishearings the wake words allow for)
+    kind_matcher = MultiTargetWakeWordMatcher(config_assistants=load_config(config_path).get("assistants") or {})
     stt = STTEngine(
         model_size=stt_cfg.get("model_size", "tiny.en"),
         device=stt_cfg.get("device", "auto"),
@@ -245,20 +336,23 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
         playback_speed=float(tts_cfg.get("playback_speed", 1.0)),
         extra_model_dirs=tts_cfg.get("extra_model_dirs") or [],
     )
-    dispatcher = AdapterDispatcher(config_assistants=assistants_cfg)
+    dispatcher = roster.dispatcher
     # Load every voice now (Kokoro's model and phonemizer took ~0.7 s on first
     # use), so the first reply is not slower than the rest
-    for adapter in dict.fromkeys(dispatcher.adapters.values()):
-        try:
-            voice = tts.get_or_load_voice(adapter.voice_file)
-            if str(adapter.voice_file).startswith("kokoro:"):
-                list(voice.synthesize("Ready."))
-        except Exception as err:
-            logger.warning(f"Voice {adapter.voice_file} for {adapter.name} failed to load: {err}")
+    def load_voices(adapters):
+        for adapter in adapters:
+            try:
+                voice = tts.get_or_load_voice(adapter.voice_file)
+                if str(adapter.voice_file).startswith("kokoro:"):
+                    list(voice.synthesize("Ready."))
+            except Exception as err:
+                logger.warning(f"Voice {adapter.voice_file} for {adapter.name} failed to load: {err}")
+    load_voices(dispatcher.members())
     conversation = Conversation(state_mgr, tts, dispatcher)
     # tmux treats "." and ":" as target separators, so the session name is letters, digits and dashes
     tmux = TmuxBridge(session_name=re.sub(r"[^a-z0-9]+", "-", app_name(config).lower()).strip("-") or "voice-cockpit")
-    council_members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
+    # A question about the team itself waiting for a spoken yes: (asked at, action, name, kind)
+    team_ask = {}
     shared_turns = int(system_cfg.get("shared_transcript_turns", 6))
     continuation_s = float(audio_cfg.get("continuation_seconds", 4.0))
     # Actions an assistant was held back from, waiting for a spoken yes
@@ -297,6 +391,77 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             logger.warning("tmux not available, running in headless mode.")
             use_tmux = False
 
+    def say(text: str, target=None):
+        """Something the app itself says, in the voice of the assistant in use."""
+        adapter = dispatcher.adapters.get(target) or dispatcher.adapters.get(state_mgr.default_assistant) \
+            or dispatcher.members()[0]
+        show_reply(app_name(config), text)
+        conversation.submit(TurnContext(), lambda ctx: conversation.speak(
+            text, adapter.voice_file, adapter.voice_speaker, ctx))
+
+    def team_by_voice(prompt: str, target) -> bool:
+        """Handle "who is on the team", "ask Grok to join", "ask Grok to leave"
+        and the yes or no that follows. True when the words were about the team."""
+        if team_ask and time.monotonic() - team_ask["at"] <= approval.OPEN_SECONDS:
+            said = approval.answer(prompt)
+            ask = dict(team_ask)
+            team_ask.clear()
+            if said is not None:
+                show_you(app_name(config), prompt)
+                if said is False:
+                    say("Okay, the team stays as it is.", target)
+                    return True
+                try:
+                    raw = load_config(config_path)
+                    if ask["action"] == "join":
+                        team.add_member(raw, ask["name"], ask["kind"])
+                    else:
+                        team.remove_member(raw, ask["name"])
+                    logger.info(f"Team changed by voice: {ask['action']} {ask['name']}")
+                except team.TeamError as err:
+                    say(str(err), target)
+                return True   # the reload below announces who joined or left
+        team_ask.clear()
+        request = team_request(prompt)
+        if request is None:
+            return False
+        action, who = request
+        show_you(app_name(config), prompt)
+        if action == "who":
+            on = [display_names[k] for k in roster.members if k not in roster.benched]
+            out = [display_names[k] for k in roster.members if k in roster.benched]
+            text = f"On the team: {spoken_list(on)}."
+            if out:
+                text += f" Sitting out: {spoken_list(out)}."
+            say(text, target)
+            return True
+        if action == "leave":
+            found = roster.matcher.match(who)
+            key = found.target if found.detected and found.target in roster.members else None
+            if key is None:
+                say(f"I did not catch who should leave. On the team: {spoken_list(display_names[k] for k in roster.members)}.", target)
+                return True
+            name = display_names[key]
+            team_ask.update(at=time.monotonic(), action="leave", name=name, kind="")
+            say(f"Take {name} off the team?", target)
+            return True
+        found = kind_matcher.match(who)
+        kinds = team.templates(load_config(config_path))
+        entry = next((e for k, (tk, e) in kinds.items() if found.detected and tk == found.target), None)
+        if entry is None:
+            say("By voice I can add " + spoken_list(e.get("name", k) for k, (_, e) in kinds.items())
+                + ". For anyone else, use mcbeak team add in a terminal.", target)
+            return True
+        kind = team.kind_of(found.target, entry)
+        name = entry.get("name") or found.target.title()
+        if found.target in roster.members:
+            say(f"{name} is already on the team.", target)
+            return True
+        team_ask.update(at=time.monotonic(), action="join", name=name, kind=kind)
+        where = "What you say to it goes to its maker's servers. " if kind in team.CLOUD_KINDS else ""
+        say(f"Add {name} to the team? {where}Say yes or no.", target)
+        return True
+
     # 2. Utterance Callback
     def on_utterance(audio_data):
         try:
@@ -312,8 +477,8 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
 
             # Check wake word & active context
             active_target = state_mgr.active_assistant if state_mgr.is_in_active_window() else None
-            match = matcher.match(text, active_target=active_target)
-            text, match = second_opinion(text, match, audio_data, name_stt, matcher, active_target)
+            match = roster.matcher.match(text, active_target=active_target)
+            text, match = second_opinion(text, match, audio_data, name_stt, roster.matcher, active_target)
 
             if not match.detected:
                 logger.debug("No wake-word or active session detected. Discarding.")
@@ -328,6 +493,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
             if prompt and (is_whisper_hallucination(prompt) or len(prompt) < 3):
                 logger.info(f"Ignoring clipped remainder: {prompt!r}")
                 prompt = ""
+
+            if prompt and not use_tmux and team_by_voice(prompt, target):
+                return
 
             if conversation.control(prompt, target):
                 held.drop(target)
@@ -400,15 +568,29 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                             stop_cue()
                             if context.cancelled.is_set():
                                 return
+                            failed = getattr(dispatcher.adapters.get(member), "last_error", None)
+                            if failed:
+                                # Said once; after that it sits out team questions until
+                                # it answers when spoken to directly
+                                roster.benched[member] = failed
+                                logger.warning(f"{member} sits out team questions: {failed}")
+                                speak_reply(member, f"{display_names.get(member, member)} could not answer and will "
+                                            "sit out team questions until you speak to it directly.",
+                                            voice_file, speaker_id, context=context)
+                                return
                             if not conversation.record_turn(member, prompt, reply, context):
                                 return
                             speak_reply(member, reply, voice_file, speaker_id, announce=True, context=context)
 
+                        answering = roster.answering()
+                        if not answering:
+                            say("Nobody on the team can answer right now. Say who is on the team to hear why.")
+                            return
                         run_council(
-                            prompt, council_members, display_names, dispatcher.dispatch, transcript_for,
+                            prompt, answering, display_names, dispatcher.dispatch, transcript_for,
                             parallel=bool(council_cfg.get("parallel", True)), context=context,
                             reply_order=council_cfg.get("reply_order", "completion"), on_reply=on_reply,
-                            tone=tone,
+                            tone=tone, roles={m: dispatcher.adapters[m].role for m in answering},
                         )
                     elif use_tmux:
                         sent = tmux.send_prompt(target, prompt)
@@ -417,9 +599,11 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                         conversation.speak(ack, adapter.voice_file, adapter.voice_speaker, context)
                     else:
                         transcript = state_mgr.recent_transcript(shared_turns, exclude_assistant=target, names=display_names)
-                        full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
-                                                   list(display_names.values()), tone=tone)
                         adapter = dispatcher.adapters.get(target)
+                        full_prompt = build_prompt(prompt, target, display_names.get(target, target), transcript,
+                                                   list(display_names.values()), tone=tone,
+                                                   hint=not getattr(adapter, "spoken_system", False),
+                                                   role=getattr(adapter, "role", ""))
                         if approving and adapter is not None:
                             adapter.approve_next = approving
                         feed, live = None, {}
@@ -442,6 +626,8 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
                         stop_cue()
                         if feed:
                             feed.close()
+                        if adapter is not None and not adapter.last_error and not context.cancelled.is_set():
+                            roster.benched.pop(target, None)
                         waiting = list(getattr(adapter, "last_held", None) or [])
                         if waiting and not context.cancelled.is_set():
                             if feed:
@@ -499,7 +685,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     )
 
     recorder.start()
-    print_banner(config, dispatcher.adapters, system_cfg.get("default_assistant", "claude"))
+    print_banner(config, roster, system_cfg.get("default_assistant", "claude"))
 
     # Handle Ctrl+C cleanly
     def sig_handler(sig, frame):
@@ -515,8 +701,62 @@ def run_voice_daemon(config: dict, use_tmux: bool = False):
     # audio graph for other programs, so it quits instead
     signal.signal(signal.SIGTSTP, sig_handler)
 
+    def team_stamp():
+        try:
+            return team.team_path().stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def reload_team():
+        """The team file changed: bring the listener in line without a restart."""
+        try:
+            fresh = team.apply(load_config(config_path))
+            validate_config(fresh)
+        except (team.TeamError, ValueError, yaml.YAMLError, OSError) as err:
+            logger.warning(f"Team file not loaded, the team stays as it was: {err}")
+            return
+        before = dict(display_names)
+        added, removed = roster.load(fresh)
+        state_mgr.default_assistant = (fresh.get("system") or {}).get("default_assistant", state_mgr.default_assistant)
+        if state_mgr.active_assistant in removed:
+            state_mgr.reset_to_passive()
+        for key in removed:
+            held.drop(key)
+        for engine in (stt, name_stt):
+            if engine is not None:
+                engine.hint_words, engine.lead_in = hint_words(fresh) or None, whisper_lead_in(fresh) or None
+        load_voices(dispatcher.adapters[k] for k in added)
+        joined = [k for k in added if k not in before]
+        left = [before[k] for k in removed]
+        if not joined and not left:
+            if added:
+                show_note("team settings updated: " + ", ".join(display_names[k] for k in added))
+            return
+        logger.info(f"Team reloaded: joined {joined}, left {left}")
+        print_banner(fresh, roster, state_mgr.default_assistant)
+        if state_mgr.busy or tts.is_playing:
+            return
+        for key in joined[:1]:
+            adapter = dispatcher.adapters[key]
+            text = f"{display_names[key]} joined the team."
+            if key in roster.benched:
+                text = f"{display_names[key]} is on the team but cannot answer yet: {roster.benched[key]}."
+            show_reply(app_name(config), text)
+            conversation.submit(TurnContext(), lambda ctx: conversation.speak(
+                text, adapter.voice_file, adapter.voice_speaker, ctx))
+        if left and not joined:
+            say(f"{spoken_list(left)} left the team.")
+
+    stamp = team_stamp()
     while True:
         time.sleep(0.5)
+        now_stamp = team_stamp()
+        if now_stamp != stamp and not use_tmux:
+            stamp = now_stamp
+            try:
+                reload_team()
+            except Exception:
+                logger.exception("Reloading the team failed; the team stays as it was")
 
 
 def claim_listener(config: dict, replace: bool) -> InstanceLock:
@@ -597,10 +837,92 @@ def test_voices(config: dict):
     print("\n✅ Voice test completed!\n")
 
 
+def team_command(argv) -> int:
+    """`mcbeak team`: see, add to and remove from the team. It only edits the
+    team file; a copy that is listening picks the change up by itself."""
+    parser = argparse.ArgumentParser(prog="mcbeak team", description="Who is on the team")
+    parser.add_argument("--config", default="config.yaml", help=argparse.SUPPRESS)
+    actions = parser.add_subparsers(dest="action")
+    actions.add_parser("list", help="Show the team (also what plain `mcbeak team` does)")
+    add = actions.add_parser("add", help="Add a member, e.g. `mcbeak team add Grok` or `mcbeak team add Ada claude`")
+    add.add_argument("name", help="What you will call it out loud")
+    add.add_argument("kind", nargs="?", help=f"{', '.join(team.KINDS)} (not needed when the name is the kind)")
+    add.add_argument("--model", help="Model to use (required for ollama; otherwise the program's own default)")
+    add.add_argument("--folder", help="Folder it works in (default: where mcbeak is started)")
+    add.add_argument("--permissions", choices=["readonly", "full"], help="readonly (default) or full")
+    add.add_argument("--voice", help='e.g. "kokoro:af_bella" (default: a voice nobody else has)')
+    add.add_argument("--role", help="A standing brief, added to everything it is asked")
+    add.add_argument("--host", help="ollama: where Ollama runs (default http://127.0.0.1:11434)")
+    remove = actions.add_parser("remove", help="Take a member off the team")
+    remove.add_argument("name")
+    args = parser.parse_args(argv)
+    raw = load_config(args.config)
+    path = team.team_path()
+    try:
+        if args.action == "add":
+            kind = team.KIND_ALIASES.get(str(args.kind or team.slug(args.name)).lower(),
+                                         str(args.kind or team.slug(args.name)).lower())
+            if kind == "ollama":
+                from adapters.ollama_adapter import OllamaAdapter, DEFAULT_HOST, installed_models
+                host = args.host or DEFAULT_HOST
+                if not args.model:
+                    try:
+                        have = ", ".join(installed_models(host)) or "none yet (ollama pull MODEL)"
+                    except Exception:
+                        have = f"unknown, Ollama is not answering at {host}"
+                    raise team.TeamError(f"Say which model {args.name} is, with --model. Installed: {have}")
+                reason = OllamaAdapter({"name": args.name, "model": args.model, "host": host}).unavailable()
+                if reason:
+                    raise team.TeamError(f"{args.name} cannot join: {reason}.")
+            entry = team.add_member(raw, args.name, args.kind, path=path, model=args.model, folder=args.folder,
+                                    permissions=args.permissions, voice=args.voice, role=args.role, host=args.host)
+            said = bare_name((entry.get("wake_words") or [args.name])[0])
+            print(f'{entry["name"]} is on the team. Say "Hey {said}, ..." (voice {entry["voice"]}, '
+                  f'permissions {entry.get("permissions", "readonly")}).')
+            if entry["kind"] in team.CLOUD_KINDS:
+                print(f"What you say to {entry['name']} is sent by its own program to its maker; nothing else is.")
+            else:
+                print(f"{entry['name']} runs on your own machines; nothing you say to it leaves them.")
+            print(f"Team file: {path}\nA copy that is listening picks this up by itself.")
+            return 0
+        if args.action == "remove":
+            member = team.remove_member(raw, args.name, path=path)
+            print(f"{member['name']} is off the team. Team file: {path}")
+            return 0
+        config = team.apply(raw, path=path)
+    except team.TeamError as err:
+        print(err, file=sys.stderr)
+        return 1
+    rows = [("Say", "Name", "Kind", "Model", "Folder", "Voice", "Permissions")]
+    for key, a in config["assistants"].items():
+        rows.append((f'"Hey {bare_name((a.get("wake_words") or [key])[0])}"', a.get("name", key), a.get("kind", ""),
+                     str(a.get("model") or "default"),
+                     "-" if a.get("kind") in ("ollama", "guaardvark") else str(a.get("folder") or a.get("workspace") or "where started"),
+                     str(a.get("voice", "")).replace("en_US-", "").replace(".onnx", "")
+                     + (f" #{a['voice_speaker']}" if a.get("voice_speaker") else ""),
+                     "talks only" if a.get("kind") == "ollama" else a.get("permissions", "readonly")))
+    widths = [max(len(r[i]) for r in rows) + 2 for i in range(len(rows[0]))]
+    print()
+    for row in rows:
+        print("  " + "".join(f"{cell:<{w}}" for cell, w in zip(row, widths)).rstrip())
+    for note in config.get("team_notes") or []:
+        print(f"  {note}")
+    if config.get("team_file"):
+        print(f"\n  Team file: {config['team_file']}")
+    else:
+        print(f"\n  This is the starting team: every assistant in config.yaml that is installed here.\n"
+              f"  Your first `mcbeak team add` or `remove` writes it to {path}; after that the file is the team.")
+    print("  mcbeak team add NAME [KIND] [--model M] [--folder DIR] [--permissions full] [--role TEXT]\n"
+          "  mcbeak team remove NAME\n")
+    return 0
+
+
 def main():
     # A native crash (PortAudio, CTranslate2, onnxruntime) prints every thread's Python stack
     faulthandler.enable()
-    parser = argparse.ArgumentParser(description="Voice cockpit for AI coding assistants")
+    parser = argparse.ArgumentParser(description="Voice cockpit for AI coding assistants",
+                                     epilog="`mcbeak team` shows the team; `mcbeak team add NAME [KIND]` and "
+                                            "`mcbeak team remove NAME` change it.")
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
     parser.add_argument("--listen", action="store_true", help="Listen continuously (also what plain `mcbeak` does)")
     parser.add_argument("--tmux", action="store_true", help="Launch 5-pane Tmux Cockpit and voice daemon")
@@ -611,8 +933,13 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--verbose", action="store_true", help="Also show the technical log lines in the terminal")
 
+    if len(sys.argv) > 1 and sys.argv[1] == "team":
+        sys.exit(team_command(sys.argv[2:]))
     args = parser.parse_args()
-    config = load_config(args.config)
+    try:
+        config = team.apply(load_config(args.config))
+    except team.TeamError as err:
+        sys.exit(str(err))
     console_detail(args.verbose or str((config.get("system") or {}).get("console", "")).lower() == "verbose")
 
     if args.doctor:
@@ -630,18 +957,29 @@ def main():
         if target.lower() == "team":
             council_cfg = config.get("council", {}) or {}
             members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
+            members = [m for m in members if not dispatcher.adapters[m].unavailable()]
             for member, reply in run_council(prompt, members, names, dispatcher.dispatch, lambda m: "",
                                              parallel=bool(council_cfg.get("parallel", True)),
-                                             reply_order=council_cfg.get("reply_order", "completion")):
+                                             reply_order=council_cfg.get("reply_order", "completion"),
+                                             roles={m: dispatcher.adapters[m].role for m in members}):
                 show_reply(names.get(member, member), reply)
         else:
-            resp, voice, speaker = dispatcher.dispatch(target, build_prompt(prompt, target, names.get(target, target), "", []))
-            show_reply(names.get(target, target), resp)
+            key = target.lower()
+            if key not in dispatcher.adapters:
+                found = team.find([{"name": a.get("name", k), "kind": k} for k, a in assistants_cfg.items()], target)
+                key = found["kind"] if found else key
+            adapter = dispatcher.adapters.get(key)
+            if adapter is None:
+                sys.exit(f"There is no team member called {target}. On the team: {', '.join(names.values())}.")
+            resp, voice, speaker = dispatcher.dispatch(key, build_prompt(
+                prompt, key, names.get(key, key), "", [],
+                hint=not getattr(adapter, "spoken_system", False), role=adapter.role))
+            show_reply(names.get(key, key), resp)
     else:
         # Plain `mcbeak` listens. Checked before any model loads or the
         # microphone opens; the lock is held until exit.
         lock = claim_listener(config, replace=args.replace)  # noqa: F841 (kept open)
-        run_voice_daemon(config, use_tmux=args.tmux)
+        run_voice_daemon(config, use_tmux=args.tmux, config_path=args.config)
 
 
 if __name__ == "__main__":

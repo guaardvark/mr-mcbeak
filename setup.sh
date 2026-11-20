@@ -110,7 +110,7 @@ ln -sf "$SCRIPT_DIR/run.sh" "$HOME/.local/bin/mcbeak"
 
 # 7. Verify AI Assistant CLIs
 echo "🤖 Verifying AI Assistant CLIs..."
-for cli in claude grok agy agent guaardvark; do
+for cli in claude codex grok agy agent guaardvark ollama; do
     if command -v "$cli" >/dev/null 2>&1; then
         echo "   ✅ Found CLI: $cli ($(command -v $cli))"
     else
@@ -125,7 +125,7 @@ echo "🧪 Running unit tests..."
 echo "=========================================================================="
 echo "✨ Mr. McBeak is set up."
 echo "🚀 Start with:"
-echo "   mcbeak --listen      # Continuous background voice listener"
-echo "   mcbeak --tmux        # Split-screen 5-pane interactive cockpit"
-echo "   mcbeak --test-voice  # Test audio voices for all 5 assistants"
+echo "   mcbeak               # Listen and talk"
+echo "   mcbeak team          # Who is on the team; mcbeak team add NAME KIND to add someone"
+echo "   mcbeak --test-voice  # Hear each team member's voice"
 echo "=========================================================================="

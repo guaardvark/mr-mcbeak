@@ -10,6 +10,9 @@ system:
   thinking_cue_every: 3            # Seconds between pulses; the first comes after half of this
   speak_early: true                # Claude: speak the first sentence while the rest is still being written
   shared_transcript_turns: 6       # How many recent turns of the others each assistant is shown
+  remember_conversations: true     # Each assistant carries on its last conversation after a restart (only the
+                                   # CLI's conversation id is saved, in ~/.local/state/mcbeak/sessions.json)
+  remember_hours: 72               # ... if it was used within this many hours; "new conversation" forgets it
 
 audio:
   sample_rate: 16000
@@ -60,6 +63,11 @@ tts:
   sentence_streaming: true         # Synthesize and play sentence-by-sentence
 
 # Assistant Definitions & Wake Word Mapping
+#
+# These describe each kind of assistant. Until you shape your own team, the team
+# is every assistant below whose program is installed. `mcbeak team add NAME KIND`
+# (or "Mr. McBeak, ask Grok to join") starts your own team file,
+# ~/.config/mcbeak/team.yaml, and from then on that file says who is on the team.
 #
 # Per assistant, optional keys:
 #   permissions: readonly | full   readonly (default) = the CLI may read and answer, not edit or run
@@ -182,6 +190,7 @@ assistants:
     cli_cmd: "guaardvark"
     mode: "headless"
     api_url: "http://127.0.0.1:5000/api/enhanced-chat"   # synchronous chat; the CLI is the fallback
+    permissions: "full"            # Guaardvark has no read-only mode, so read-only made it refuse every request
     use_rag: false                 # true = search indexed documents on every spoken turn (slower)
     wake_words:
       - "guaardvark"
@@ -229,6 +238,6 @@ council:
     - "ok team"
     - "everyone"
     - "hey everyone"
-  members: ["claude", "grok", "antigravity", "cursor", "codex", "guaardvark"]
+  members: ["claude", "grok", "antigravity", "cursor", "codex", "guaardvark"]   # with a team file: everyone in it
   parallel: true
   reply_order: completion         # completion (fastest first) or member (configured order)

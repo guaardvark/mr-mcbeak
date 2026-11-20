@@ -109,9 +109,42 @@ class Conversation:
         if not context.cancelled.is_set():
             context.reply_finished_at = time.monotonic()
 
+    # What people actually say for each control, after "please", "okay" and
+    # the like are dropped from either end
+    CONTROLS = {
+        "stop": ("stop", "stop it", "stop talking", "be quiet", "quiet", "that's enough", "enough", "shush"),
+        "go to sleep": ("go to sleep", "sleep", "go back to sleep", "stop listening"),
+        "new conversation": ("new conversation", "start a new conversation", "start over", "fresh start",
+                             "forget this conversation"),
+        "repeat that": ("repeat that", "repeat", "say that again", "say it again", "come again",
+                        "what did you say", "can you repeat that", "could you repeat that"),
+    }
+    _FILLER = ("please", "okay", "ok", "now", "thanks", "thank you", "just", "hey")
+
+    @classmethod
+    def control_command(cls, prompt):
+        """The control a short phrase asks for ("stop please" -> "stop"), or None."""
+        words = "".join(c if c.isalnum() or c in "' " else " " for c in (prompt or "").lower()).split()
+        if not words or len(words) > 7:
+            return None
+        changed = True
+        while changed and words:
+            changed = False
+            for filler in cls._FILLER:
+                part = filler.split()
+                if words[:len(part)] == part and len(words) > len(part):
+                    words, changed = words[len(part):], True
+                if words[-len(part):] == part and len(words) > len(part):
+                    words, changed = words[:-len(part)], True
+        said = " ".join(words)
+        for command, phrases in cls.CONTROLS.items():
+            if said in phrases:
+                return command
+        return None
+
     def control(self, prompt, target):
-        command = prompt.lower().strip(" .!?\t\n")
-        if command not in {"stop", "go to sleep", "new conversation", "repeat that"}:
+        command = self.control_command(prompt)
+        if command is None:
             return False
         self.cancel()
         if command == "go to sleep":

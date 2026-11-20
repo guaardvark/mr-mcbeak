@@ -17,6 +17,7 @@ import json
 import subprocess
 import logging
 import os
+import shutil
 import signal
 import time
 
@@ -31,12 +32,18 @@ class BaseAdapter(ABC):
     """
 
     def __init__(self, name: str, target_id: str, config: Dict[str, Any]):
-        self.name = name
+        # target_id is the kind of assistant (claude, grok, ...); the name is the
+        # member's own, so a team can hold several members of one kind
+        self.name = config.get("name") or name
         self.target_id = target_id
         self.config = config
+        # Added to every prompt, e.g. "You review changes before they land."
+        self.role = str(config.get("role") or "").strip()
+        # Why the last turn failed (missing CLI, not signed in, timeout), else None
+        self.last_error: Optional[str] = None
         self.voice_file = config.get("voice", "en_US-ryan-high.onnx")
         self.voice_speaker = config.get("voice_speaker", 0)
-        self.workspace = os.path.expanduser(config.get("workspace") or "") or None
+        self.workspace = os.path.expanduser(config.get("workspace") or config.get("folder") or "") or None
         self.model = config.get("model") or None
         self.readonly = str(config.get("permissions", "readonly")).lower() != "full"
         self.timeout = int(config.get("timeout_seconds", 120))
@@ -58,6 +65,20 @@ class BaseAdapter(ABC):
         """Forget the CLI conversation; the next turn starts fresh."""
         self.session_id = None
 
+    def unavailable(self) -> Optional[str]:
+        """Why this member cannot answer on this machine, or None when it can."""
+        binary = getattr(self, "cli_binary", None)
+        if binary and not shutil.which(binary):
+            return f"the {os.path.basename(binary)} command is not installed"
+        return None
+
+    def get_state(self) -> Dict[str, Any]:
+        """What is needed to carry the conversation on after a restart."""
+        return {"session_id": self.session_id} if self.session_id else {}
+
+    def set_state(self, state: Dict[str, Any]):
+        self.session_id = state.get("session_id") or self.session_id
+
     def run_subprocess(self, cmd: list[str], cwd: Optional[str] = None, timeout: Optional[int] = None, context=None) -> str:
         """
         Helper to run CLI command safely. Returns stdout, or a short spoken error.
@@ -67,6 +88,7 @@ class BaseAdapter(ABC):
         # Flags only: the user's words and long JSON arguments stay out of the log
         shown = [c for c in cmd if "\n" not in c and len(c) <= 60 and (c is cmd[0] or c.startswith("-") or len(c) <= 40)]
         logger.info(f"[{self.name}] Running: {' '.join(shown)} (cwd={working_dir})")
+        self.last_error = None
 
         try:
             if context and context.cancelled.is_set():
@@ -98,6 +120,7 @@ class BaseAdapter(ABC):
             res = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
             if res.returncode != 0:
                 logger.warning(f"[{self.name}] Exit code {res.returncode}: {res.stderr[:300]}")
+                self.last_error = (res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}")[:200]
                 if res.stdout.strip():
                     return res.stdout.strip()
                 return f"Error running {self.name}: {res.stderr.strip()[:150]}"
@@ -106,9 +129,11 @@ class BaseAdapter(ABC):
 
         except subprocess.TimeoutExpired:
             logger.error(f"[{self.name}] Command timed out after {timeout}s")
+            self.last_error = f"no answer within {timeout} seconds"
             return f"Sorry, {self.name} took too long to respond."
         except Exception as e:
             logger.error(f"[{self.name}] Execution error: {e}")
+            self.last_error = str(e)[:200]
             return f"Error communicating with {self.name}: {str(e)}"
 
     def run_streaming(self, cmd: list[str], on_line, cwd: Optional[str] = None, context=None) -> str:
@@ -119,6 +144,7 @@ class BaseAdapter(ABC):
         working_dir = cwd or self.workspace or os.getcwd()
         shown = [c for c in cmd if "\n" not in c and len(c) <= 60 and (c is cmd[0] or c.startswith("-") or len(c) <= 40)]
         logger.info(f"[{self.name}] Running: {' '.join(shown)} (cwd={working_dir})")
+        self.last_error = None
         if context and context.cancelled.is_set():
             return ""
         try:
@@ -127,6 +153,7 @@ class BaseAdapter(ABC):
                                     env=child_env(), bufsize=1)
         except Exception as e:
             logger.error(f"[{self.name}] Execution error: {e}")
+            self.last_error = str(e)[:200]
             return f"Error communicating with {self.name}: {str(e)}"
         lines: "queue.Queue" = queue.Queue()
         stderr_parts = []
@@ -155,6 +182,7 @@ class BaseAdapter(ABC):
             if time.monotonic() >= deadline:
                 stop_process()
                 logger.error(f"[{self.name}] Command timed out after {self.timeout}s")
+                self.last_error = f"no answer within {self.timeout} seconds"
                 return f"Sorry, {self.name} took too long to respond."
             try:
                 line = lines.get(timeout=0.1)
@@ -172,8 +200,35 @@ class BaseAdapter(ABC):
         if proc.returncode != 0 and not collected:
             err = "".join(stderr_parts).strip()
             logger.warning(f"[{self.name}] Exit code {proc.returncode}: {err[:300]}")
+            self.last_error = err[:200] or f"exit code {proc.returncode}"
             return f"Error running {self.name}: {err[:150]}"
+        if proc.returncode != 0:
+            self.last_error = ("".join(stderr_parts).strip() or f"exit code {proc.returncode}")[:200]
         return "".join(collected)
+
+    def post_json(self, url: str, payload: dict, timeout: Optional[float] = None, context=None):
+        """POST to a local or LAN service without holding up the conversation: the
+        request runs on its own thread, and a cancelled turn returns None at once
+        while the abandoned request finishes in the background and is discarded.
+        Raises what the request raised."""
+        import threading
+        import requests
+        box = {}
+
+        def call():
+            try:
+                box["response"] = requests.post(url, json=payload, timeout=timeout or self.timeout)
+            except Exception as err:
+                box["error"] = err
+        worker = threading.Thread(target=call, name="http", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if context and context.cancelled.is_set():
+                return None
+            worker.join(0.1)
+        if "error" in box:
+            raise box["error"]
+        return box["response"]
 
     @staticmethod
     def parse_json_reply(raw: str, text_keys: tuple, session_keys: tuple) -> tuple[str, Optional[str]]:

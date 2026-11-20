@@ -60,6 +60,8 @@ class TmuxBridge:
         for adapter in dict.fromkeys(adapters.values()):
             if adapter.readonly and not adapter.capabilities["readonly"]:
                 continue
+            if not getattr(adapter, "cli_binary", None):
+                continue  # a model behind an API has no terminal program to show
             launches.append((adapter, self.launch_command(adapter)))
         if not launches:
             raise RuntimeError("No adapters can be launched with configured permissions")

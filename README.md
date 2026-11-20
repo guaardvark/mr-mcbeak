@@ -1,9 +1,10 @@
 # Mr. McBeak
 
 Hands-free voice front end for several AI coding assistants on one machine:
-Claude Code, Codex, Grok, Antigravity, Cursor Agent and a local Guaardvark. Speech is
-recognised locally (faster-whisper) and replies are spoken locally (Kokoro or
-Piper), each assistant in its own voice.
+Claude Code, Codex, Grok, Antigravity, Cursor Agent, a local Guaardvark and any
+model served by Ollama. Speech is recognised locally (faster-whisper) and replies
+are spoken locally (Kokoro or Piper), each assistant in its own voice. You choose
+who is on the team, from one member to as many as you can tell apart by ear.
 
 ## Run
 
@@ -16,6 +17,8 @@ mcbeak --stop         # stop the copy that is listening
 mcbeak --test-voice   # hear every assistant's voice
 mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
 mcbeak --cli team "which database should we use"   # ask everyone
+mcbeak team           # who is on the team
+mcbeak team add Grok  # add a member; see "The team"
 ```
 
 The terminal shows the conversation: what you said and to whom, each reply,
@@ -24,6 +27,62 @@ time: a second one names the copy already running (PID, start time, terminal)
 and exits before it opens the microphone. Ctrl+C or Ctrl+Z quits (Ctrl+Z would
 otherwise leave it paused, still holding the microphone). Each session is logged to `~/.local/state/mcbeak/mcbeak.log`, which
 includes what was heard and stays on this machine.
+
+## The team
+
+A member is a name plus a kind: `claude`, `codex`, `grok`, `antigravity`,
+`cursor`, `guaardvark` or `ollama`. Until you change it, the team is every
+assistant in `config.yaml` whose program is installed on the machine; one that
+is missing is left out and named when the app starts.
+
+```
+mcbeak team                                    # name, kind, model, folder, voice, permissions
+mcbeak team add Grok                           # the name is the kind
+mcbeak team add Ada claude --folder ~/site --model claude-haiku-5-5 \
+    --role "You review changes before they land."
+mcbeak team add Gemma ollama --model gemma4:12b   # a model on your own machine
+mcbeak team remove Ada
+```
+
+The first `add` or `remove` writes the team to `~/.config/mcbeak/team.yaml`
+(`$MCBEAK_TEAM` overrides the path), and from then on that file is the team.
+It holds only what you chose; the rest is filled in:
+
+- wake words from the name (`Ada`, `Hey Ada`, `OK Ada`), and the name is given
+  to Whisper so it is heard;
+- a voice nobody else on the team has. The first ten handed out are the Kokoro
+  voices Whisper understood best when measured; a machine without Kokoro gets
+  Piper LibriTTS speakers;
+- `permissions: readonly` unless you pass `--permissions full`.
+
+A name is refused when it could be mistaken for another member, for the app's
+own name, or for a spoken command: `Grock` next to Grok, `Aida` next to Ada,
+`Stop`. Two members of one kind each keep their own conversation, so three
+Claudes in three folders are three separate sessions.
+
+A copy that is listening notices the file change within half a second: the new
+member answers to its name without a restart and says so in its own voice.
+Editing the file by hand, or having another program write it, works the same
+way.
+
+By voice, to the app's own name or to any member:
+
+- `Mr. McBeak, who is on the team?`
+- `Mr. McBeak, ask Grok to join.` It asks first ("Add Grok to the team? What
+  you say to it goes to its maker's servers. Say yes or no.") and adds the
+  member read-only on a spoken yes. This works for the kinds `config.yaml`
+  describes; an Ollama model, a second member of a kind, a folder or full
+  permissions go through `mcbeak team add`.
+- `Mr. McBeak, ask Grok to leave.`
+
+An `ollama` member talks to Ollama at `http://127.0.0.1:11434` (`--host` for
+an Ollama on another of your machines). It has no tools and no file access,
+its reply is spoken as it is written, and nothing said to it leaves your
+machines. Its conversation is kept in memory and ends when the app stops.
+
+A member that cannot answer (program missing, not signed in, model not
+pulled, no reply in time) says so once and then sits out `Hey team` questions.
+Speaking to it by name tries it again, and one good answer puts it back.
 
 ## Talking to it
 
@@ -64,7 +123,11 @@ includes what was heard and stays on this machine.
 - While an assistant works, a soft two-note pulse plays every few seconds
   (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the
-  conversation.
+  conversation. The session ids are saved in
+  `~/.local/state/mcbeak/sessions.json` (ids only, never the words), so a
+  member carries on after a restart when it was used in the last 72 hours from
+  the same folder (`system.remember_conversations`, `remember_hours`). `new
+  conversation` forgets it.
 
 ## Safety
 
@@ -140,13 +203,15 @@ All run on this machine; `./setup.sh` fetches them once, at pinned versions.
 
 The follow-up window starts after the reply finishes, including interrupted
 replies. During an active conversation, say `stop`, `go to sleep`,
-`new conversation`, or `repeat that`. While passive, include a wake word.
+`new conversation`, or `repeat that`; "stop please", "be quiet", "start over"
+and "say that again" are understood too. While passive, include a wake word.
 New conversation resets the active assistant (all members for Team) and clears
 shared history. Repeat replays the last spoken reply without another model call.
 
 Interruptions cancel the current turn and suppress remaining council replies.
-CLI process groups are terminated; HTTP calls already in progress finish within
-the configured timeout, and their cancelled responses are discarded. Backend
+CLI process groups are terminated. A Guaardvark request already in progress is
+abandoned at once, so the next question is not kept waiting, and its late
+response is discarded; an Ollama reply stops generating. Backend
 turns are serialized while transcription remains available for local controls.
 Headphones are still advised: energy-based barge-in cannot distinguish speaker
 output from your voice as reliably as acoustic echo cancellation.
@@ -156,7 +221,7 @@ Council requests run in parallel by default, using a snapshot of prior context.
 retain configured member order. Use `parallel: false` when each member should
 see earlier answers from the current round.
 
-Run `mcbeak --doctor` to check configuration, audio devices, voice models,
+Run `mcbeak --doctor` to check the team, audio devices, voice models,
 workspaces, CLI installation and permission flags without sending model prompts.
 Capture currently requires `audio.sample_rate: 16000`. Timing logs include a
 turn ID, transcription completion, backend response, and first playback start.
@@ -169,6 +234,6 @@ individual requests acknowledge successful delivery rather than reading terminal
 output aloud. Local stop sends Ctrl+C to the last addressed pane; new
 conversation restarts the configured pane.
 
-Guaardvark's API and CLI do not currently expose verified read-only enforcement.
-Its default read-only adapter refuses execution and is omitted from tmux panes.
-Only explicitly configured `permissions: full` permits Guaardvark execution.
+Guaardvark's API and CLI do not expose a read-only mode, so a Guaardvark
+member set to `permissions: readonly` refuses every request. It runs on your
+own machine and is `full` in `config.yaml` and for members added to the team.

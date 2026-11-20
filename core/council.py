@@ -13,13 +13,24 @@ SPOKEN_HINT = (
     "You are speaking out loud in a voice conversation. Answer in at most three "
     "short spoken sentences. Do not narrate tools, subagents, or your process.\n\n"
 )
+# The same hint for assistants that take it as a system prompt, so it is said
+# once per conversation instead of in front of every question
+SPOKEN_SYSTEM = (
+    "You are {name}, speaking out loud in a voice conversation. The user's words reach you "
+    "through speech recognition, so a word may be misheard (\"three plus three\" arriving as "
+    "\"Street Plus 3\"); go by what they most likely meant. Answer in at most three short "
+    "spoken sentences unless the message asks for something else. Plain sentences only: no "
+    "lists, no markdown. Do not narrate tools, subagents, or your process."
+)
 
 
 def build_prompt(prompt: str, assistant_id: str, display_name: str, transcript: str,
                  participants: List[str], council: bool = False, max_sentences: int = 3,
-                 tone: str = "") -> str:
+                 tone: str = "", hint: bool = True, role: str = "") -> str:
     """Wrap the user's words with the spoken-reply hint, the shared transcript
-    and, when the tone model heard something clear, a note on the tone of voice."""
+    and, when the tone model heard something clear, a note on the tone of voice.
+    hint=False for an assistant that already has the hint as its system prompt;
+    role is the member's standing brief from the team file."""
     parts = []
     if council:
         others = ", ".join(p for p in participants if p != display_name) or "nobody else"
@@ -28,15 +39,17 @@ def build_prompt(prompt: str, assistant_id: str, display_name: str, transcript: 
             f"Answer as yourself in at most {max_sentences} short spoken sentences; you may agree or "
             "disagree with the others by name. Do not narrate tools, subagents, or your process.\n"
         )
-    else:
+    elif hint:
         parts.append(SPOKEN_HINT)
+    if role and (council or hint):
+        parts.append(f"Your role on this team: {role}\n")
     if tone:
         parts.append(f"(Tone of voice, read from the audio by a local model and sometimes wrong: the user {tone}. "
                      "Let it shape your manner; do not mention it unless asked.)\n")
     if transcript:
         parts.append("Recent conversation (other participants; your own turns are in your session):\n"
                      f"{transcript}\n")
-    parts.append(f"User: {prompt}" if (council or transcript) else prompt)
+    parts.append(f"User: {prompt}" if (council or transcript or (role and hint)) else prompt)
     return "\n".join(parts)
 
 
@@ -51,6 +64,7 @@ def run_council(
     reply_order: str = "completion",
     on_reply: Optional[Callable[[str, str, str, int], None]] = None,
     tone: str = "",
+    roles: Optional[Dict[str, str]] = None,
 ) -> List[Tuple[str, str]]:
     """
     Ask every member the same question. Return replies in playback order.
@@ -65,7 +79,7 @@ def run_council(
         full = build_prompt(
             prompt, member, display_names.get(member, member.title()),
             snapshots[member] if parallel else transcript_for(member), names, council=True, max_sentences=2,
-            tone=tone,
+            tone=tone, role=(roles or {}).get(member, ""),
         )
         try:
             if context and context.cancelled.is_set():

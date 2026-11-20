@@ -5,7 +5,6 @@ Invokes local Guaardvark via REST API or CLI (`guaardvark ask "<prompt>"`).
 import json
 import uuid
 import shutil
-import requests
 import logging
 from typing import Optional, Dict, Any
 from adapters.base_adapter import BaseAdapter
@@ -28,6 +27,9 @@ class GuaardvarkAdapter(BaseAdapter):
     def reset_session(self):
         self.session_id = uuid.uuid4().hex
 
+    def unavailable(self):
+        return None  # the API or the CLI may come up later; a failed turn says so
+
     def execute(self, prompt: str, cwd: Optional[str] = None, context=None) -> str:
         if not prompt or not prompt.strip():
             return "Guaardvark online. Standing by for instructions."
@@ -38,13 +40,14 @@ class GuaardvarkAdapter(BaseAdapter):
             return ""
 
         # Try REST API first (faster if backend is running)
+        self.last_error = None
         try:
-            resp = requests.post(
+            resp = self.post_json(
                 self.api_url,
-                json={"message": prompt, "session_id": self.session_id or "voice_cockpit", "use_rag": self.use_rag},
-                timeout=self.timeout,
+                {"message": prompt, "session_id": self.session_id or "voice_cockpit", "use_rag": self.use_rag},
+                context=context,
             )
-            if context and context.cancelled.is_set():
+            if resp is None or (context and context.cancelled.is_set()):
                 return ""
             if resp.status_code == 200:
                 data = resp.json()
