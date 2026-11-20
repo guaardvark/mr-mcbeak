@@ -112,6 +112,12 @@ Speaking to it by name tries it again, and one good answer puts it back.
 - Claude's replies start playing as soon as the first sentence is written
   (`system.speak_early`); with Opus that was about 0.8 s sooner on a
   three-sentence answer. One-sentence answers play when they are complete.
+- A Claude member's `claude` process stays up between questions
+  (`keep_alive`), so a turn does not pay for starting it: 0.62 s against
+  1.14 s on short questions with Haiku. Talking over a reply ends that process
+  and the next question resumes the same session in a new one. A command you
+  approved by voice runs in its own process, with only that command allowed.
+  Each kept process holds about 220 MB.
 - Tone of voice (`emotion.enabled`): a local model (emotion2vec+ large, about
   70 ms on the CPU, alongside transcription) listens to how you said it. A clear
   reading goes to the assistant with your words as a hint, such as "sounds

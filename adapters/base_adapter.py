@@ -72,6 +72,12 @@ class BaseAdapter(ABC):
             return f"the {os.path.basename(binary)} command is not installed"
         return None
 
+    def warm(self):
+        """Get ready before the first question (the listener calls this)."""
+
+    def close(self):
+        """Let go of anything kept between turns."""
+
     def get_state(self) -> Dict[str, Any]:
         """What is needed to carry the conversation on after a restart."""
         return {"session_id": self.session_id} if self.session_id else {}

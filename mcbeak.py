@@ -161,8 +161,11 @@ class Roster:
     changes, so the objects handed out here (names, council, dispatcher) stay
     the same ones."""
 
-    def __init__(self, config: dict, sessions=None):
+    def __init__(self, config: dict, sessions=None, warm: bool = False):
         self.dispatcher = AdapterDispatcher({}, sessions=sessions)
+        # The listener keeps each member ready between questions; one-off
+        # commands do not
+        self.warm = warm
         self.names: dict = {}
         self.council: list = []
         # Members sitting out team questions, with the reason (program missing,
@@ -196,6 +199,8 @@ class Roster:
             reason = self.dispatcher.adapters[key].unavailable()
             if reason:
                 self.benched[key] = reason
+            elif self.warm:
+                self.dispatcher.adapters[key].warm()
         return added, removed
 
     def answering(self) -> list:
@@ -299,7 +304,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
     sessions = None
     if system_cfg.get("remember_conversations", True) and not use_tmux:
         sessions = SessionStore(max_age_hours=float(system_cfg.get("remember_hours", 72)))
-    roster = Roster(config, sessions)
+    roster = Roster(config, sessions, warm=not use_tmux)
     display_names = roster.names
     # The kinds of assistant config.yaml describes, to recognise a spoken
     # "ask Grok to join" (with the same mishearings the wake words allow for)

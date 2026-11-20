@@ -1,15 +1,28 @@
 """
 Claude Code CLI Adapter.
-Runs `claude -p --output-format json`, resumes the same session on later turns.
+
+A turn is either a fresh `claude -p` that resumes the member's session, or,
+once warm() has been called (the listener does this), a message written to one
+`claude -p --input-format stream-json` process that stays up between turns.
+Measured 2026-11-19 with Haiku on short questions: 1.14 s per turn with a
+fresh process, 0.62 s with the process kept alive.
 """
+import atexit
 import json
 import logging
+import os
+import queue
 import shutil
+import signal
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from adapters.base_adapter import BaseAdapter
 from core.approval import rule_prefix, subcommands
 from core.council import SPOKEN_SYSTEM
+from core.privacy import child_env
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +57,129 @@ class ClaudeAdapter(BaseAdapter):
         # the user approved by voice for the next one
         self.last_held = []
         self.approve_next = []
+        # keep_alive: false goes back to a fresh process per turn (each kept
+        # process holds a few hundred MB; see README)
+        self.keep_alive = bool(config.get("keep_alive", True))
+        self._warm = False
+        self._live = None            # {"proc", "lines", "stderr", "cwd"} of the kept process
+        self._live_lock = threading.RLock()
+
+    # -- the process kept alive between turns ---------------------------------
+    def warm(self):
+        """Start the long-lived process now, so the first question does not
+        wait for it. Without this call every turn is a fresh process."""
+        if not self.keep_alive:
+            return
+        self._warm = True
+        atexit.register(self.close)
+        self._start_live_soon()
+
+    def close(self):
+        """Stop the kept process (the session itself stays on disk)."""
+        with self._live_lock:
+            live, self._live = self._live, None
+        if live and live["proc"].poll() is None:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(live["proc"].pid, sig)
+                    live["proc"].wait(timeout=0.5)
+                    break
+                except ProcessLookupError:
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+
+    def _start_live_soon(self):
+        threading.Thread(target=self._live_process, name="claude-warm", daemon=True).start()
+
+    def _live_process(self, cwd: Optional[str] = None):
+        """The kept process for `cwd`, started if there is none. None when it
+        cannot be started."""
+        working_dir = cwd or self.workspace or os.getcwd()
+        with self._live_lock:
+            live = self._live
+            if live and live["proc"].poll() is None and live["cwd"] == working_dir:
+                return live
+            self.close()
+            cmd = [self.cli_binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                   "--verbose", "--include-partial-messages", *self._turn_flags([])]
+            try:
+                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, cwd=working_dir, start_new_session=True, env=child_env(), bufsize=1)
+            except OSError as err:
+                logger.error(f"[{self.name}] Could not start: {err}")
+                return None
+            live = {"proc": proc, "lines": queue.Queue(), "stderr": [], "cwd": working_dir}
+            threading.Thread(target=lambda: ([live["lines"].put(l) for l in proc.stdout], live["lines"].put(None)),
+                             daemon=True).start()
+            threading.Thread(target=lambda: live["stderr"].append(proc.stderr.read()), daemon=True).start()
+            logger.info(f"[{self.name}] Process kept ready (cwd={working_dir}"
+                        f"{', resuming its conversation' if self.session_id else ''})")
+            self._live = live
+            return live
+
+    def _execute_live(self, live, prompt: str, context=None, on_text=None) -> Optional[str]:
+        """One turn through the kept process. Returns the final result event as
+        a JSON line, "" when cancelled, or None when the process could not take
+        the turn (the caller then runs it the ordinary way)."""
+        self.last_error = None
+        lines = live["lines"]
+        while True:  # startup events and anything left from an abandoned turn
+            try:
+                if lines.get_nowait() is None:
+                    return self._live_died(live)
+            except queue.Empty:
+                break
+        try:
+            live["proc"].stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
+            live["proc"].stdin.flush()
+        except (OSError, ValueError):
+            return self._live_died(live)
+        logger.info(f"[{self.name}] Asked through the kept process (cwd={live['cwd']})")
+        handle = self._stream_handler(on_text) if on_text else None
+        deadline = time.monotonic() + self.timeout
+        while True:
+            cancelled = context and context.cancelled.is_set()
+            if cancelled or time.monotonic() >= deadline:
+                # The only sure way to stop a turn; the next one resumes the session
+                self.close()
+                self._start_live_soon()
+                if cancelled:
+                    return ""
+                logger.error(f"[{self.name}] No answer within {self.timeout}s")
+                self.last_error = f"no answer within {self.timeout} seconds"
+                return json.dumps({"result": f"Sorry, {self.name} took too long to respond."})
+            try:
+                line = lines.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if line is None:
+                return self._live_died(live)
+            if handle:
+                try:
+                    handle(line)
+                except Exception as err:
+                    logger.error(f"[{self.name}] Stream handler error: {err}")
+            if '"result"' in line:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("type") == "result":
+                    if event.get("is_error"):
+                        self.last_error = str(event.get("result") or event.get("subtype") or "error")[:200]
+                    return line
+
+    def _live_died(self, live) -> Optional[str]:
+        """The kept process ended by itself (signed out, session gone, crash)."""
+        time.sleep(0.1)
+        err = "".join(live["stderr"]).strip()
+        logger.warning(f"[{self.name}] Kept process ended (exit {live['proc'].poll()}): {err[:300]}")
+        with self._live_lock:
+            if self._live is live:
+                self._live = None
+        self.last_error = err[:200] or "the claude process ended"
+        return None
 
     def _mcp_args(self):
         if self.mcp in (None, "all"):
@@ -101,6 +237,16 @@ class ClaudeAdapter(BaseAdapter):
     def reset_session(self):
         super().reset_session()
         self.last_held, self.approve_next = [], []
+        if self._warm:
+            self.close()
+            self._start_live_soon()
+
+    def set_state(self, state):
+        before = self.session_id
+        super().set_state(state)
+        if self._warm and self.session_id != before:
+            self.close()
+            self._start_live_soon()
 
     # Replies can be spoken while they are being written (execute(on_text=...))
     streams = True
@@ -146,45 +292,74 @@ class ClaudeAdapter(BaseAdapter):
                     continue
         return raw
 
-    def execute(self, prompt: str, cwd: Optional[str] = None, context=None, on_text=None) -> str:
-        self.last_held = []
-        if not prompt or not prompt.strip():
-            return "Yes, how can I help you?"
-
-        # The prompt goes first: --mcp-config takes several values and would
-        # swallow a prompt placed after it
-        cmd = [self.cli_binary, "-p", prompt]
-        cmd += (["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
-                if on_text else ["--output-format", "json"])
+    def _turn_flags(self, approved) -> list:
+        """Everything on the command line but the prompt and the output format."""
+        flags = []
         if self.model:
-            cmd += ["--model", self.model]
+            flags += ["--model", self.model]
         if self.effort:
-            cmd += ["--effort", str(self.effort)]
-        approved, self.approve_next = self.approve_next, []
+            flags += ["--effort", str(self.effort)]
         if self.readonly:
-            cmd += ["--permission-mode", "plan"]
+            flags += ["--permission-mode", "plan"]
         else:
             # Before 2026-11-10 "full" passed no mode, and `claude -p` without one
             # refuses every edit and command (Manual mode), so voice turns were
             # read-only in practice
-            cmd += ["--permission-mode", "auto"]
+            flags += ["--permission-mode", "auto"]
             asks = [r for r in self.confirm_first if not self._approved(r, approved)]
             if asks:
-                cmd += ["--settings", json.dumps({"permissions": {"ask": asks}})]
+                flags += ["--settings", json.dumps({"permissions": {"ask": asks}})]
             if approved:
-                cmd += ["--allowedTools", *self._allow_rules(approved)]
+                flags += ["--allowedTools", *self._allow_rules(approved)]
         if self.session_id:
-            cmd += ["--resume", self.session_id]
-        cmd += ["--append-system-prompt",
-                SPOKEN_SYSTEM.format(name=self.name) + (f" Your role on this team: {self.role}" if self.role else "")]
-        cmd += self._mcp_args()
+            flags += ["--resume", self.session_id]
+        flags += ["--append-system-prompt",
+                  SPOKEN_SYSTEM.format(name=self.name) + (f" Your role on this team: {self.role}" if self.role else "")]
+        return flags + self._mcp_args()
 
-        if on_text:
-            raw = self._result_line(self.run_streaming(cmd, self._stream_handler(on_text), cwd=cwd, context=context))
-        else:
-            raw = self.run_subprocess(cmd, cwd=cwd, context=context)
+    def execute(self, prompt: str, cwd: Optional[str] = None, context=None, on_text=None) -> str:
+        self.last_held = []
+        if not prompt or not prompt.strip():
+            return "Yes, how can I help you?"
+        approved, self.approve_next = self.approve_next, []
+
+        raw = None
+        if self._warm and not approved:
+            if context and context.cancelled.is_set():
+                return ""
+            live = self._live_process(cwd)
+            if live is not None:
+                raw = self._execute_live(live, prompt, context=context, on_text=on_text)
+                if raw is None and self.session_id is None and not (context and context.cancelled.is_set()):
+                    # Nothing to lose by trying once more with a new process
+                    live = self._live_process(cwd)
+                    raw = self._execute_live(live, prompt, context=context, on_text=on_text) if live else None
+                if raw is None and self.last_error:
+                    return f"Error running {self.name}: {self.last_error[:150]}"
+        if raw is None:
+            # A fresh process for this turn. An approved re-run needs its own
+            # command line (the approved commands are allowed for this turn only),
+            # and two processes must not write to one session at once.
+            if self._warm:
+                self.close()
+            # The prompt goes first: --mcp-config takes several values and would
+            # swallow a prompt placed after it
+            cmd = [self.cli_binary, "-p", prompt]
+            cmd += (["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+                    if on_text else ["--output-format", "json"])
+            cmd += self._turn_flags(approved)
+            try:
+                if on_text:
+                    raw = self._result_line(self.run_streaming(cmd, self._stream_handler(on_text), cwd=cwd, context=context))
+                else:
+                    raw = self.run_subprocess(cmd, cwd=cwd, context=context)
+            finally:
+                if self._warm:
+                    text, session = self.parse_json_reply(raw or "", ("result",), ("session_id",))
+                    self.session_id = session or self.session_id
+                    self._start_live_soon()
         self.last_held = self._held(raw)
         text, session = self.parse_json_reply(raw, ("result",), ("session_id",))
-        if session:
+        if session and session != self.session_id:
             self.session_id = session
         return text or f"{self.name} did not answer."

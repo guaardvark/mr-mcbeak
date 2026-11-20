@@ -78,6 +78,8 @@ class AdapterDispatcher:
         removed = [key for key in current if key not in config_assistants]
         self.adapters = adapters
         live = set(adapters.values())
+        for adapter in set(current.values()) - live:
+            adapter.close()
         self._locks = {a: lock for a, lock in self._locks.items() if a in live}
         return added, removed
 

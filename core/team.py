@@ -43,13 +43,14 @@ KIND_PROGRAM = {"claude": "claude", "codex": "codex", "grok": "grok", "antigravi
 # Kinds that send what you say to them to a company's servers
 CLOUD_KINDS = ("claude", "codex", "grok", "antigravity", "cursor")
 # Settings a member takes from its kind's entry in config.yaml
-KIND_KEYS = ("cli_cmd", "mode", "mcp", "api_url", "use_rag", "effort", "confirm_first", "timeout_seconds")
+KIND_KEYS = ("cli_cmd", "mode", "mcp", "api_url", "use_rag", "effort", "confirm_first", "timeout_seconds",
+             "keep_alive")
 # Settings that belong to the member the config.yaml entry is named after
 IDENTITY_KEYS = ("wake_words", "phonetic_variants", "voice", "voice_speaker", "description")
 # What a member in the team file may set
 MEMBER_KEYS = ("name", "kind", "folder", "workspace", "model", "permissions", "role", "voice", "voice_speaker",
                "wake_words", "phonetic_variants", "host", "mcp", "effort", "timeout_seconds", "think",
-               "api_url", "use_rag", "history_messages", "confirm_first", "cli_cmd")
+               "api_url", "use_rag", "history_messages", "confirm_first", "cli_cmd", "keep_alive")
 
 # Voices handed out to members that do not name one. The first ten were heard
 # clearly by Whisper when measured (64-65 of 67 words); the rest are unmeasured.
