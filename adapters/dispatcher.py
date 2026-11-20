@@ -42,6 +42,8 @@ class AdapterDispatcher:
         self.adapters: Dict[str, BaseAdapter] = {}
         # Optional core.sessions.SessionStore: conversations carry on after a restart
         self.sessions = sessions
+        # "group:<name>" -> member keys, for "new conversation" said to a group
+        self.groups: Dict[str, list] = {}
         self._restored = set()
         self.update(config_assistants)
 
@@ -88,7 +90,12 @@ class AdapterDispatcher:
         return list(dict.fromkeys(self.adapters.values()))
 
     def reset_sessions(self, target):
-        adapters = (set(self.adapters.values()) if target == "team" else {self.adapters[target]})
+        if target == "team":
+            adapters = set(self.adapters.values())
+        elif target in self.groups:
+            adapters = {self.adapters[m] for m in self.groups[target] if m in self.adapters}
+        else:
+            adapters = {self.adapters[target]}
         for adapter in adapters:
             with self._locks[adapter]:
                 adapter.reset_session()

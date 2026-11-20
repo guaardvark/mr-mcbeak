@@ -81,6 +81,18 @@ an Ollama on another of your machines). It has no tools and no file access,
 its reply is spoken as it is written, and nothing said to it leaves your
 machines. Its conversation is kept in memory and ends when the app stops.
 
+With more than a few members, `Hey team` asks more assistants than you want
+to wait for. A group is part of the team under its own name:
+
+```
+mcbeak team group reviewers Ada Grok     # "Hey reviewers, ..." asks Ada and Grok
+mcbeak team group reviewers              # no members: the group is deleted
+```
+
+Groups are kept in the same file under `groups:`. A follow-up without a name
+stays with the group, the same naming rules apply as for members, and a
+member who leaves the team leaves its groups.
+
 A member that cannot answer (program missing, not signed in, model not
 pulled, no reply in time) says so once and then sits out `Hey team` questions.
 Speaking to it by name tries it again, and one good answer puts it back.

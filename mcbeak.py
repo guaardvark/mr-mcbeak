@@ -121,6 +121,7 @@ def hint_words(config: dict) -> str:
         names += [bare_name(w) for w in (a.get("wake_words") or [key])[:1]]
     # Assistants that could be asked to join, so "ask Codex to join" is heard right
     names += list(config.get("known_names") or [])
+    names += [g["name"] for g in (config.get("groups") or {}).values()]
     return ", ".join(dict.fromkeys(n for n in names if n))
 
 
@@ -171,6 +172,8 @@ class Roster:
         # Members sitting out team questions, with the reason (program missing,
         # not signed in, no answer); speaking to one directly brings it back
         self.benched: dict = {}
+        # "group:<name>" -> member keys: part of the team asked together
+        self.groups: dict = {}
         self.matcher = None
         self.load(config)
 
@@ -192,6 +195,12 @@ class Roster:
         self.names.clear()
         self.names.update(names)
         self.council[:] = [m for m in (council_cfg.get("members") or list(self.members)) if m in self.dispatcher.adapters]
+        self.groups.clear()
+        for key, group in (config.get("groups") or {}).items():
+            self.groups[key] = [m for m in group["members"] if m in self.dispatcher.adapters]
+            self.names[key] = group["name"]
+            self.matcher.register_target(key, group["wake_words"])
+        self.dispatcher.groups = self.groups
         for key in removed:
             self.benched.pop(key, None)
         for key in added:
@@ -203,9 +212,13 @@ class Roster:
                 self.dispatcher.adapters[key].warm()
         return added, removed
 
-    def answering(self) -> list:
-        """Council members who are not sitting out."""
-        return [m for m in self.council if m not in self.benched]
+    def answering(self, target: str = "team") -> list:
+        """Who answers a question to the whole team or to a group: its members
+        who are not sitting out."""
+        return [m for m in self.groups.get(target, self.council) if m not in self.benched]
+
+    def is_group(self, target) -> bool:
+        return target == "team" or target in self.groups
 
 
 _TEAM_WHO = re.compile(r"^(who is|who's|whos) (on|in) the team$|^who(?: is|'s|s)? here$|^who can i talk to$")
@@ -262,7 +275,7 @@ def print_banner(config: dict, roster: Roster, default_assistant: str):
         rows.append((f'"{bare_name((a.get("wake_words") or [key])[0])} ..."', goes_to, voice, mode))
     coordinator = app_name(config) if config.get("coordinator_wake_words") else ""
     default_name = adapters[default_assistant].name if default_assistant in adapters else default_assistant
-    width = max(len(r[0]) for r in rows) + 3 if rows else 20
+    width = max([len(r[0]) for r in rows] + [len(roster.names[k]) + 10 for k in roster.groups] + [17]) + 3
     wide = max([len(r[1]) for r in rows] + [13]) + 3
     print(f"\n  {app_name(config)}  ·  listening\n")
     print(f"  {'Say':<{width}}{'Goes to':<{wide}}{'Voice':<22}Permissions")
@@ -271,6 +284,9 @@ def print_banner(config: dict, roster: Roster, default_assistant: str):
     if coordinator:
         print(f'  {chr(34) + coordinator + " ..." + chr(34):<{width}}the last assistant you used (first: {default_name})')
     print(f'  {chr(34) + "Hey team ..." + chr(34):<{width}}everyone, in turn')
+    for key, members in roster.groups.items():
+        print(f'  {chr(34) + "Hey " + roster.names[key] + " ..." + chr(34):<{width}}'
+              f'{spoken_list(roster.names[m] for m in members)}')
     for note in config.get("team_notes") or []:
         print(f"  {note}")
     print("\n  Keep talking for 30 s without a name. Talk over a reply to stop it.")
@@ -565,7 +581,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                 stop_cue = (start_thinking_cue(tts, context, float(system_cfg.get("thinking_cue_every", 3.0)))
                             if cue_on else (lambda: None))
                 try:
-                    if target == "team":
+                    if roster.is_group(target):
                         def transcript_for(member):
                             return state_mgr.recent_transcript(shared_turns, exclude_assistant=member, names=display_names)
 
@@ -587,7 +603,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                                 return
                             speak_reply(member, reply, voice_file, speaker_id, announce=True, context=context)
 
-                        answering = roster.answering()
+                        answering = roster.answering(target)
                         if not answering:
                             say("Nobody on the team can answer right now. Say who is on the team to hear why.")
                             return
@@ -727,9 +743,11 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
             logger.warning(f"Team file not loaded, the team stays as it was: {err}")
             return
         before = dict(display_names)
+        groups_before = {k: list(v) for k, v in roster.groups.items()}
         added, removed = roster.load(fresh)
         state_mgr.default_assistant = (fresh.get("system") or {}).get("default_assistant", state_mgr.default_assistant)
-        if state_mgr.active_assistant in removed:
+        if state_mgr.active_assistant in removed or (
+                str(state_mgr.active_assistant).startswith("group:") and state_mgr.active_assistant not in roster.groups):
             state_mgr.reset_to_passive()
         for key in removed:
             held.drop(key)
@@ -740,7 +758,9 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
         joined = [k for k in added if k not in before]
         left = [before[k] for k in removed]
         if not joined and not left:
-            if added:
+            if groups_before != roster.groups:
+                print_banner(fresh, roster, state_mgr.default_assistant)
+            elif added:
                 show_note("team settings updated: " + ", ".join(display_names[k] for k in added))
             return
         logger.info(f"Team reloaded: joined {joined}, left {left}")
@@ -958,6 +978,10 @@ def team_command(argv) -> int:
     add.add_argument("--host", help="ollama: where Ollama runs (default http://127.0.0.1:11434)")
     remove = actions.add_parser("remove", help="Take a member off the team")
     remove.add_argument("name")
+    group = actions.add_parser("group", help='Part of the team under one name, e.g. `mcbeak team group reviewers Ada Grok` '
+                                             'for "Hey reviewers ..."; no members deletes the group')
+    group.add_argument("name", help="What you will call the group out loud")
+    group.add_argument("members", nargs="*", help="Member names")
     args = parser.parse_args(argv)
     raw = load_config(args.config)
     path = team.team_path()
@@ -992,6 +1016,15 @@ def team_command(argv) -> int:
             member = team.remove_member(raw, args.name, path=path)
             print(f"{member['name']} is off the team. Team file: {path}")
             return 0
+        if args.action == "group":
+            made = team.set_group(raw, args.name, args.members, path=path)
+            if made is None:
+                print(f"The group {args.name} is gone. Team file: {path}")
+            else:
+                names = team.apply(load_config(args.config), path=path)["assistants"]
+                print(f'Say "Hey {made["name"]}, ..." to ask '
+                      f'{spoken_list(names[m].get("name", m) for m in made["members"] if m in names)}. Team file: {path}')
+            return 0
         config = team.apply(raw, path=path)
     except team.TeamError as err:
         print(err, file=sys.stderr)
@@ -1010,13 +1043,16 @@ def team_command(argv) -> int:
         print("  " + "".join(f"{cell:<{w}}" for cell, w in zip(row, widths)).rstrip())
     for note in config.get("team_notes") or []:
         print(f"  {note}")
+    for key, grp in (config.get("groups") or {}).items():
+        print(f'  "Hey {grp["name"]}" asks ' + spoken_list(config["assistants"][m].get("name", m) for m in grp["members"]))
     if config.get("team_file"):
         print(f"\n  Team file: {config['team_file']}")
     else:
         print(f"\n  This is the starting team: every assistant in config.yaml that is installed here.\n"
               f"  Your first `mcbeak team add` or `remove` writes it to {path}; after that the file is the team.")
     print("  mcbeak team add NAME [KIND] [--model M] [--folder DIR] [--permissions full] [--role TEXT]\n"
-          "  mcbeak team remove NAME\n")
+          "  mcbeak team remove NAME\n"
+          "  mcbeak team group GROUP NAME NAME ...     (\"Hey GROUP ...\" asks just them)\n")
     return 0
 
 
@@ -1061,9 +1097,12 @@ def main():
         assistants_cfg = config.get("assistants", {})
         dispatcher = AdapterDispatcher(assistants_cfg)
         names = {k: a.get("name", k.title()) for k, a in assistants_cfg.items()}
-        if target.lower() == "team":
+        group_key = f"group:{team.slug(target)}"
+        if target.lower() == "team" or group_key in (config.get("groups") or {}):
             council_cfg = config.get("council", {}) or {}
             members = [m for m in (council_cfg.get("members") or list(assistants_cfg)) if m in dispatcher.adapters]
+            if target.lower() != "team":
+                members = [m for m in config["groups"][group_key]["members"] if m in dispatcher.adapters]
             members = [m for m in members if not dispatcher.adapters[m].unavailable()]
             for member, reply in run_council(prompt, members, names, dispatcher.dispatch, lambda m: "",
                                              parallel=bool(council_cfg.get("parallel", True)),

@@ -18,6 +18,9 @@ guaardvark, ollama). The team is kept in one small file the user owns,
         kind: ollama
         model: gemma4:12b
 
+    groups:                      # optional: "Hey reviewers ..." asks just these
+      reviewers: [Ada, Claude]
+
 and everything else is filled in: wake words from the name, a voice nobody
 else on the team has, and the kind's settings from config.yaml. Without the
 file, the team is every assistant in config.yaml whose program is installed.
@@ -97,8 +100,7 @@ def templates(config: dict) -> Dict[str, Tuple[str, dict]]:
     return found
 
 
-def read_team(path: Optional[Path] = None) -> Optional[List[dict]]:
-    """The members in the team file, or None when there is no file."""
+def _read_file(path: Optional[Path] = None) -> Optional[dict]:
     path = path or team_path()
     if not path.exists():
         return None
@@ -106,19 +108,42 @@ def read_team(path: Optional[Path] = None) -> Optional[List[dict]]:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as err:
         raise TeamError(f"{path} is not valid YAML: {err}")
-    members = data.get("team") if isinstance(data, dict) else data
+    if isinstance(data, list):
+        data = {"team": data}
+    members = data.get("team") if isinstance(data, dict) else None
     if not isinstance(members, list) or not all(isinstance(m, dict) for m in members):
         raise TeamError(f"{path} must hold a list of members under 'team:'")
-    return members
+    groups = data.get("groups") or {}
+    if not isinstance(groups, dict) or not all(isinstance(v, list) for v in groups.values()):
+        raise TeamError(f"{path}: 'groups:' must map each group name to a list of member names")
+    return {"team": members, "groups": {str(k): [str(n) for n in v] for k, v in groups.items()}}
 
 
-def write_team(members: List[dict], path: Optional[Path] = None):
+def read_team(path: Optional[Path] = None) -> Optional[List[dict]]:
+    """The members in the team file, or None when there is no file."""
+    data = _read_file(path)
+    return None if data is None else data["team"]
+
+
+def read_groups(path: Optional[Path] = None) -> Dict[str, List[str]]:
+    """Group name -> member names, as written in the team file."""
+    data = _read_file(path)
+    return {} if data is None else data["groups"]
+
+
+def write_team(members: List[dict], path: Optional[Path] = None, groups: Optional[Dict[str, List[str]]] = None):
+    """Write the team file. groups=None keeps the groups already in it."""
     path = path or team_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    head = ("# Who is on the team. Edit here or with `mcbeak team add/remove`;\n"
+    if groups is None:
+        groups = read_groups(path)
+    head = ("# Who is on the team. Edit here or with `mcbeak team add/remove/group`;\n"
             "# a running copy picks the change up by itself.\n"
             f"# Kinds: {', '.join(KINDS)}\n")
-    body = yaml.safe_dump({"team": members}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    data = {"team": members}
+    if groups:
+        data["groups"] = groups
+    body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(head + body, encoding="utf-8")
     os.replace(tmp, path)
@@ -223,6 +248,30 @@ def resolve(members: List[dict], config: dict, root: Optional[Path] = None) -> D
     return out
 
 
+def resolve_groups(groups: Dict[str, List[str]], team: Dict[str, dict], config: dict) -> Dict[str, dict]:
+    """Groups from the team file as {"group:<slug>": {"name", "members", "wake_words"}},
+    members given as team keys."""
+    listing = [{"name": e.get("name", k), "kind": e.get("kind", ""), "key": k} for k, e in team.items()]
+    taken = {e.get("name", k): list(e.get("wake_words") or []) + list(e.get("phonetic_variants") or [])
+             for k, e in team.items()}
+    out: Dict[str, dict] = {}
+    for name, wanted in groups.items():
+        check_name(name, taken, config)
+        keys = []
+        for who in wanted:
+            member = find(listing, who)
+            if member is None:
+                raise TeamError(f'Group "{name}" names {who}, who is not on the team.')
+            if member["key"] not in keys:
+                keys.append(member["key"])
+        if not keys:
+            raise TeamError(f'Group "{name}" has nobody in it.')
+        shown = " ".join(w.capitalize() for w in spoken(name).split())
+        taken[shown] = default_wake_words(name)
+        out[f"group:{slug(name)}"] = {"name": shown, "members": keys, "wake_words": default_wake_words(name)}
+    return out
+
+
 def missing_program(entry: dict) -> Optional[str]:
     """The program a member needs that is not installed here, or None."""
     program = KIND_PROGRAM.get(entry.get("kind") or "")
@@ -254,6 +303,10 @@ def apply(config: dict, path: Optional[Path] = None, root: Optional[Path] = None
     if not present:
         raise TeamError("Nobody on the team can run on this machine. " + " ".join(notes)
                         + " Add someone with: mcbeak team add NAME KIND")
+    groups = resolve_groups(read_groups(path), team, config) if members is not None else {}
+    for group in groups.values():
+        group["members"] = [m for m in group["members"] if m in present]
+    config["groups"] = {key: group for key, group in groups.items() if group["members"]}
     config["assistants"] = present
     config["team_notes"] = notes
     # Names of the assistants config.yaml describes, given to speech recognition
@@ -342,5 +395,27 @@ def remove_member(config: dict, name: str, path: Optional[Path] = None) -> dict:
     if len(members) == 1:
         raise TeamError(f"{member['name']} is the only one on the team; add someone else first.")
     members.remove(member)
-    write_team(members, path)
+    groups = {name: [n for n in names if find([member], n) is None] for name, names in read_groups(path).items()}
+    write_team(members, path, groups={name: names for name, names in groups.items() if names})
     return member
+
+
+def set_group(config: dict, name: str, names: List[str], path: Optional[Path] = None,
+              root: Optional[Path] = None) -> Optional[dict]:
+    """Make the group `name` these members, or delete it when `names` is empty.
+    Returns the resolved group, or None when it was deleted."""
+    members = [dict(m) for m in current_members(config, path)]
+    groups = read_groups(path)
+    existing = next((g for g in groups if slug(g) == slug(name)), None)
+    if not names:
+        if existing is None:
+            raise TeamError(f'There is no group called {name}.')
+        del groups[existing]
+        write_team(members, path, groups=groups)
+        return None
+    if existing is not None:
+        del groups[existing]
+    groups[name.strip()] = [str(n) for n in names]
+    resolved = resolve_groups(groups, resolve(members, config, root), config)   # validates
+    write_team(members, path, groups=groups)
+    return resolved[f"group:{slug(name)}"]

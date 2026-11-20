@@ -38,7 +38,7 @@ class StateManager:
             if detected_target == "coordinator":
                 # Coordinator wake-word -> routes to active assistant or default
                 target = self.active_assistant or self.default_assistant
-                if target == "team":
+                if target == "team" or target.startswith("group:"):
                     target = self.default_assistant
             else:
                 # Includes "team": the council stays active for follow-ups

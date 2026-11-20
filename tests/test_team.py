@@ -106,6 +106,44 @@ class TeamFileTests(unittest.TestCase):
             team.remove_member(config(), "Claude", path=self.path)
 
 
+class GroupTests(unittest.TestCase):
+    def setUp(self):
+        self.path = Path(tempfile.mkdtemp()) / "team.yaml"
+        self.which = patch("core.team.shutil.which", side_effect=lambda n: f"/bin/{n}")
+        self.which.start()
+        self.addCleanup(self.which.stop)
+        team.write_team([{"name": "Claude"}, {"name": "Grok"}, {"name": "Ada", "kind": "claude"}], self.path, groups={})
+
+    def test_group_is_resolved_to_member_keys_with_its_own_wake_words(self):
+        made = team.set_group(config(), "reviewers", ["Ada", "claude"], path=self.path)
+        self.assertEqual(made["members"], ["ada", "claude"])
+        cfg = team.apply(config(), path=self.path)
+        group = cfg["groups"]["group:reviewers"]
+        self.assertEqual(group["name"], "Reviewers")
+        self.assertIn("hey reviewers", group["wake_words"])
+
+    def test_unknown_member_and_confusable_name_are_refused(self):
+        with self.assertRaises(team.TeamError):
+            team.set_group(config(), "reviewers", ["Zed"], path=self.path)
+        with self.assertRaises(team.TeamError):
+            team.set_group(config(), "Aida", ["Grok"], path=self.path)
+        self.assertEqual(team.read_groups(self.path), {})
+
+    def test_adding_a_member_keeps_groups_and_leaving_the_team_leaves_them(self):
+        team.set_group(config(), "reviewers", ["Ada", "Grok"], path=self.path)
+        team.add_member(config(), "Codex", "codex", path=self.path)
+        self.assertEqual(team.read_groups(self.path), {"reviewers": ["Ada", "Grok"]})
+        team.remove_member(config(), "Ada", path=self.path)
+        self.assertEqual(team.read_groups(self.path), {"reviewers": ["Grok"]})
+        team.remove_member(config(), "Grok", path=self.path)
+        self.assertEqual(team.read_groups(self.path), {})
+
+    def test_deleting_a_group(self):
+        team.set_group(config(), "reviewers", ["Ada"], path=self.path)
+        self.assertIsNone(team.set_group(config(), "reviewers", [], path=self.path))
+        self.assertEqual(team.read_groups(self.path), {})
+
+
 class DispatcherTests(unittest.TestCase):
     def test_two_members_of_one_kind_and_update_keeps_unchanged_adapters(self):
         members = {"grok": {"target_id": "grok"}, "rex": {"kind": "grok", "name": "Rex"}}
