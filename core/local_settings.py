@@ -30,14 +30,38 @@ def merge(base: dict, override: dict) -> dict:
     return out
 
 
+def parse(text: str, source: str = "The settings text") -> dict:
+    """Settings text as a mapping. Raises ValueError saying what is wrong with it."""
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as err:
+        raise ValueError(f"{source} is not valid YAML: {err}")
+    if not isinstance(data, dict):
+        raise ValueError(f"{source} must hold settings as a mapping, like config.yaml")
+    return data
+
+
+def read_text(path: Optional[Path] = None) -> str:
+    """The settings file as written, or "" when there is none."""
+    path = path or settings_path()
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
 def apply(config: dict, path: Optional[Path] = None) -> dict:
     path = path or settings_path()
     if not path.exists():
         return config
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as err:
-        raise ValueError(f"{path} is not valid YAML: {err}")
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must hold settings as a mapping, like config.yaml")
-    return merge(config, data)
+    return merge(config, parse(path.read_text(encoding="utf-8"), str(path)))
+
+
+def write_text(text: str, path: Optional[Path] = None) -> dict:
+    """Replace the settings file with `text`, kept as written so its comments
+    survive. Text that is not a YAML mapping is refused and the file is left
+    alone. Returns the settings it holds."""
+    data = parse(text)
+    path = path or settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text if text.endswith("\n") or not text else text + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return data

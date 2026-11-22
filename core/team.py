@@ -54,6 +54,8 @@ IDENTITY_KEYS = ("wake_words", "phonetic_variants", "voice", "voice_speaker", "d
 MEMBER_KEYS = ("name", "kind", "folder", "workspace", "model", "permissions", "role", "voice", "voice_speaker",
                "wake_words", "phonetic_variants", "host", "mcp", "effort", "timeout_seconds", "think",
                "api_url", "use_rag", "history_messages", "confirm_first", "cli_cmd", "keep_alive")
+# Member settings that are text when set
+_TEXT_KEYS = ("kind", "folder", "workspace", "model", "permissions", "role", "voice", "host", "api_url", "cli_cmd")
 
 # Voices handed out to members that do not name one. The first ten were heard
 # clearly by Whisper when measured (64-65 of 67 words); the rest are unmeasured.
@@ -419,3 +421,58 @@ def set_group(config: dict, name: str, names: List[str], path: Optional[Path] = 
     resolved = resolve_groups(groups, resolve(members, config, root), config)   # validates
     write_team(members, path, groups=groups)
     return resolved[f"group:{slug(name)}"]
+
+
+def replace_team(config: dict, members: List[dict], groups: Optional[Dict[str, List[str]]] = None,
+                 path: Optional[Path] = None, root: Optional[Path] = None) -> Dict[str, dict]:
+    """Make the team file exactly these members, for a program that edits the
+    whole team at once. Every member is held to what `add_member` asks of one,
+    and nothing is written unless all of it holds. groups=None keeps the
+    file's groups, less anyone who left. Returns the resolved team."""
+    if not isinstance(members, list) or not members or not all(isinstance(m, dict) for m in members):
+        raise TeamError("The team needs at least one member, each with a name and a kind.")
+    before = {slug(m.get("name", "")) for m in current_members(config, path)}
+    kinds = templates(config)
+    clean = []
+    for raw in members:
+        member = {k: v for k, v in raw.items() if v not in (None, "")}
+        name = member.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise TeamError("A team member has no name.")
+        member["name"] = name = name.strip()
+        for key in _TEXT_KEYS:
+            if key in member and not isinstance(member[key], str):
+                raise TeamError(f"{name}: {key} must be text.")
+        for key in ("wake_words", "phonetic_variants"):
+            if key in member and not (isinstance(member[key], list) and member[key]
+                                      and all(isinstance(w, str) and w.strip() for w in member[key])):
+                raise TeamError(f"{name}: {key} must be a list of phrases.")
+        if member.get("permissions") not in (None, "readonly", "full"):
+            raise TeamError(f"{name}: permissions must be readonly or full.")
+        folder = member.get("folder") or member.get("workspace")
+        if folder and not Path(os.path.expanduser(folder)).is_dir():
+            raise TeamError(f"{name}: the folder {folder} does not exist.")
+        kind = str(member.get("kind") or slug(name)).lower()
+        kind = KIND_ALIASES.get(kind, kind)
+        if kind in KINDS and slug(name) not in before:
+            program = missing_program({"kind": kind, "cli_cmd": member.get("cli_cmd")
+                                       or (kinds.get(kind) or ("", {}))[1].get("cli_cmd")})
+            if program:
+                raise TeamError(f"{name} needs the {program} command, which is not installed on this machine. "
+                                "Install it, sign in, then add the member again.")
+        clean.append({k: member[k] for k in ("name", "kind") if k in member}
+                     | {k: v for k, v in member.items() if k not in ("name", "kind")})
+    resolved = resolve(clean, config, root)   # validates the whole team
+    if all(missing_program(entry) for entry in resolved.values()):
+        raise TeamError("Nobody on that team can run on this machine.")
+    if groups is None:
+        kept = {name: [n for n in names if find(clean, n) is not None] for name, names in read_groups(path).items()}
+        groups = {name: names for name, names in kept.items() if names}
+    elif not isinstance(groups, dict) or not all(
+            isinstance(names, list) and all(isinstance(n, str) for n in names) for names in groups.values()):
+        raise TeamError("Groups must map each group name to a list of member names.")
+    else:
+        groups = {str(name).strip(): list(names) for name, names in groups.items()}
+    resolve_groups(groups, resolved, config)   # validates
+    write_team(clean, path, groups=groups)
+    return resolved
