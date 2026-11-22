@@ -1,0 +1,27 @@
+{
+  "id": "mcbeak",
+  "name": "Mr. McBeak",
+  "version": "0.1.0",
+  "description": "Voice front end for a team of AI coding assistants. Starting it opens this machine's microphone; speech is recognised and replies are spoken here. Stopping it closes the microphone.",
+  "author": "Guaardvark",
+  "type": "service",
+  "category": "voice",
+  "port": 8211,
+  "vram_estimate_mb": 2048,
+  "core": false,
+  "dependencies": [],
+  "config": {
+    "service_url": "http://127.0.0.1:8211",
+    "timeout": 20,
+    "fallback_enabled": false,
+    "default_enabled": false,
+    "default_auto_start": false
+  },
+  "requirements": {
+    "gpu": false,
+    "cuda": false
+  },
+  "endpoints": {
+    "health": "/health"
+  }
+}
