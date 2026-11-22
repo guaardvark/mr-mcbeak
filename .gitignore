@@ -8,3 +8,4 @@ models/kokoro/
 models/emotion/
 local-workspace-only/
 *.log
+guaardvark/plugin/plugin.local.json
