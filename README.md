@@ -193,6 +193,25 @@ finish. Sessions from before that change show such a reply as *reply spoken as i
 arrived; its text was not logged*, and replies longer than 120 characters from those
 sessions end in an ellipsis where the old log cut them.
 
+## With Guaardvark
+
+Mr. McBeak runs alone or as a [Guaardvark](https://github.com/guaardvark/guaardvark)
+plugin, from the same checkout.
+
+**Alone.** `./setup.sh`, then `mcbeak`. Nothing from Guaardvark is needed.
+
+**As a plugin.** Link the `guaardvark/` folder into a Guaardvark checkout as
+`extensions/mcbeak` and restart Guaardvark. A Mr. McBeak card appears on the
+Plugins page, and its switch starts and stops the listener. The Voice Team page
+shows whether the microphone is open, who is on the team, and edits the same
+`~/.config/mcbeak/team.yaml` that `mcbeak team add` writes. The plugin answers
+on `127.0.0.1:8214` only. Steps: [guaardvark/README.md](guaardvark/README.md).
+
+**Either way**, a member of kind `guaardvark` sends what you say to your own
+install at `/api/enhanced-chat`, with `guaardvark ask` as the fallback. A Claude
+member set to `mcp: ["guaardvark"]` can also call Guaardvark's MCP tools, image,
+video and music generation among them, from a spoken turn.
+
 ## Safety
 
 Supported adapters run read-only by default (Claude plan mode, Antigravity plan mode,

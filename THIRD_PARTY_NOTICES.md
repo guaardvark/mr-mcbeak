@@ -1,8 +1,9 @@
 # Third-party notices
 
 Mr. McBeak's own code is under the MIT licence in `LICENSE`. It downloads or
-installs the parts below on your machine; none of them is stored in this
-repository, and each keeps its own licence.
+installs the parts below on your machine. Only the small LibriTTS voice config
+(`models/piper/en_US-libritts-high.onnx.json`) is stored in this repository;
+each part keeps its own licence.
 
 ## Models
 
