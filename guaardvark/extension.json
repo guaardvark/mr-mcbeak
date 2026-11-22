@@ -1,0 +1,6 @@
+{
+  "name": "Mr. McBeak",
+  "version": "0.1.0",
+  "description": "Voice front end for a team of AI coding assistants. The Voice Team page shows who is on the team and edits the team and settings files; the listener runs as the sidecar in plugin/.",
+  "url_prefixes": ["/api/mcbeak"]
+}
