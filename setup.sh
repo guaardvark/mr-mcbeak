@@ -37,19 +37,6 @@ echo "📦 Installing / verifying Python dependencies..."
 # 2. Stage Piper Voice Models
 echo "🔊 Checking Piper TTS voice models in $MODELS_PIPER..."
 
-if [ ! -f "$MODELS_PIPER/en_US-ryan-high.onnx" ]; then
-    if [ -f "${GUAARDVARK_PIPER_DIR}/en_US-ryan-high.onnx" ]; then
-        echo "   • Copying Ryan voice from local Guaardvark tools..."
-        cp ${GUAARDVARK_PIPER_DIR}/en_US-ryan-high.onnx* "$MODELS_PIPER/"
-    else
-        echo "   • Downloading Ryan high voice from HuggingFace..."
-        wget -q --show-progress -O "$MODELS_PIPER/en_US-ryan-high.onnx" \
-            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/high/en_US-ryan-high.onnx"
-        wget -q --show-progress -O "$MODELS_PIPER/en_US-ryan-high.onnx.json" \
-            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/high/en_US-ryan-high.onnx.json"
-    fi
-fi
-
 if [ ! -f "$MODELS_PIPER/en_US-libritts-high.onnx" ]; then
     if [ -f "${GUAARDVARK_PIPER_DIR}/en_US-libritts-high.onnx" ]; then
         echo "   • Copying LibriTTS voice from local Guaardvark tools..."
@@ -89,7 +76,7 @@ for f in kokoro-v1.0.onnx voices-v1.0.bin; do
 done
 
 # 5. Tone-of-voice model (emotion2vec+ large, FunASR Model License 1.1, ~650 MB),
-#    used when emotion.enabled is true in config.yaml
+#    used when emotion.enabled is true in config.yaml or ~/.config/mcbeak/settings.yaml
 MCBEAK_DIR="$SCRIPT_DIR" "$VENV_DIR/bin/python" - <<'PY'
 import os, sys
 root = os.environ["MCBEAK_DIR"]
@@ -97,8 +84,9 @@ sys.path.insert(0, root)
 from core.privacy import disable_telemetry
 disable_telemetry()
 import yaml
-from core import emotion
-if (yaml.safe_load(open(os.path.join(root, "config.yaml"))).get("emotion") or {}).get("enabled"):
+from core import emotion, local_settings
+config = local_settings.apply(yaml.safe_load(open(os.path.join(root, "config.yaml"))) or {})
+if (config.get("emotion") or {}).get("enabled"):
     folder = os.path.join(root, "models", "emotion")
     path = emotion.model_path(folder)
     print(f"   • tone model {'present' if path.exists() else 'downloaded'}: {path if path.exists() else emotion.download_model(folder)}")

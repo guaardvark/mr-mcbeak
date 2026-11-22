@@ -34,6 +34,7 @@ from core.conversation import Conversation
 from core.turn_context import TurnContext
 from core.thinking_cue import start_thinking_cue
 from core import approval
+from core import local_settings
 from core import team
 from core.sessions import SessionStore
 from core.speech_stream import SentenceFeed
@@ -81,7 +82,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
     if not full_path.exists():
         raise FileNotFoundError(f"Config file not found at: {full_path}")
     with open(full_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return local_settings.apply(yaml.safe_load(f) or {})
 
 
 def log_path() -> Path:
@@ -853,7 +854,7 @@ def mic_check(config: dict) -> int:
                     playback_speed=float(tts_cfg.get("playback_speed", 1.0)),
                     extra_model_dirs=tts_cfg.get("extra_model_dirs") or [])
     member = next(iter((config.get("assistants") or {}).values()))
-    tts.get_or_load_voice(member.get("voice", "en_US-ryan-high.onnx"))
+    tts.get_or_load_voice(member.get("voice", "en_US-libritts-high.onnx"))
     gate = speech_gate.load("silero")
     guard = speech_gate.EchoGuard(base, margin, tts.recent_output_level)
     phase, rows = ["wait"], []
@@ -886,7 +887,7 @@ def mic_check(config: dict) -> int:
         phase[0] = "reply"
         tts.speak("This is how a reply sounds at the microphone. The speakers reach it too, "
                   "so I am measuring how much of my own voice comes back.",
-                  voice_file=member.get("voice", "en_US-ryan-high.onnx"), speaker_id=int(member.get("voice_speaker", 0)))
+                  voice_file=member.get("voice", "en_US-libritts-high.onnx"), speaker_id=int(member.get("voice_speaker", 0)))
         phase[0] = "wait"
         time.sleep(0.6)
         print(f'3/3  Now say, as you normally would: "{app_name(config)}, can you hear me?"  (five seconds)', flush=True)
@@ -948,7 +949,7 @@ def test_voices(config: dict):
 
     for key, a in assistants.items():
         name = a.get("name", key)
-        voice = a.get("voice", "en_US-ryan-high.onnx")
+        voice = a.get("voice", "en_US-libritts-high.onnx")
         speaker = a.get("voice_speaker", 0)
         phrase = sample_phrases.get(key, f"Hello from {name}.")
 

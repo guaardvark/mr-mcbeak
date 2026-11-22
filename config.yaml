@@ -42,7 +42,7 @@ audio:
   barge_in_enabled: true           # Interrupt assistant when user speaks
 
 emotion:
-  enabled: true                    # Tone of voice from the audio (emotion2vec+ large, local CPU, ~70 ms, run
+  enabled: false                   # Tone of voice from the audio (emotion2vec+ large, local CPU, ~70 ms, run
                                    # alongside transcription). A clear non-neutral reading goes to the assistant
                                    # with your words as a hint, e.g. "sounds annoyed or angry", and shows on screen.
   threshold: 0.8                   # CREMA-D test (actors, 1117 clips): 82% of emotional clips got the right hint,
@@ -91,7 +91,7 @@ assistants:
     mode: "headless"               # headless or tmux
     mcp: "none"                    # MCP servers on voice turns: all, none, or a list such as ["guaardvark"].
                                    # "none" saved ~1.4 s and ~$0.05 per turn (measured 2026-11-10)
-    permissions: "full"        # "full" lets voice commands edit files and run commands
+    permissions: "readonly"        # "full" lets voice commands edit files and run commands
     keep_alive: true               # One claude process per Claude member stays up between questions instead of
                                    # starting for each one. Measured 2026-11-19 with Haiku on short questions:
                                    # 0.62 s a turn against 1.14 s. Each kept process holds about 220 MB of
@@ -117,7 +117,7 @@ assistants:
     target_id: "grok"
     cli_cmd: "grok"
     mode: "headless"
-    permissions: "full"
+    permissions: "readonly"
     wake_words:
       - "grok"
       - "hey grok"
@@ -152,7 +152,7 @@ assistants:
       - "gravity"
       - "anti-gravity"
       - "a.g.y."
-    voice: "en_US-ryan-high.onnx"
+    voice: "kokoro:am_adam"        # Kokoro v1.0, American male
     voice_speaker: 0
     prompt_prefix: ""
     description: "Google DeepMind Agentic CLI with skills & subagents"

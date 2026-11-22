@@ -118,7 +118,7 @@ class AdapterDispatcher:
         adapter = self.adapters.get(target)
 
         if not adapter:
-            return f"There is no team member called {target_id}.", "en_US-ryan-high.onnx", 0
+            return f"There is no team member called {target_id}.", "en_US-libritts-high.onnx", 0
 
         logger.info(f"Dispatching prompt to [{adapter.name}]: '{prompt[:60]}...'")
         if context and context.cancelled.is_set():

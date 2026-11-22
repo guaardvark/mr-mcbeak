@@ -145,7 +145,7 @@ Speaking to it by name tries it again, and one good answer puts it back.
   unclear speech adds nothing. On the CREMA-D test set (actors, 1,117 clips) at
   the default threshold, 82% of emotional clips got the right hint and 7% of
   neutral ones got a hint. The hint leaves the machine with the words, which is
-  why it is a switch.
+  why it is a switch, off by default; turning it on downloads about 650 MB.
 - While an assistant works, a soft two-note pulse plays every few seconds
   (`system.thinking_cue`), so a long wait does not sound like a dead microphone.
 - Each assistant's CLI session is resumed on every turn, so it remembers the
@@ -160,8 +160,8 @@ Speaking to it by name tries it again, and one good answer puts it back.
 Supported adapters run read-only by default (Claude plan mode, Antigravity plan mode,
 Cursor ask mode, Codex's read-only sandbox, Grok with write, edit and shell tools
 denied). Set
-`permissions: full` on an assistant in `config.yaml` to let voice commands edit
-files or run commands. Remember the microphone hears everyone in the room.
+`permissions: full` on an assistant in your settings file (see Config) to let
+voice commands edit files or run commands. Remember the microphone hears everyone in the room.
 
 With `permissions: full`, Claude Code runs in its auto mode: ordinary work goes
 ahead, and its own classifier blocks destructive actions. Commands on the
@@ -190,6 +190,18 @@ switch Mr. McBeak can set.
 
 ## Config
 
+Your own choices go in `~/.config/mcbeak/settings.yaml` (`$MCBEAK_SETTINGS`
+overrides the path), which is laid over `config.yaml` key by key, so updating
+the checkout never undoes them:
+
+```
+emotion:
+  enabled: true
+assistants:
+  claude:
+    permissions: "full"
+```
+
 `config.yaml` holds the wake words, voices and the per-assistant keys
 `permissions`, `model`, `workspace` and `timeout_seconds`. Claude also takes
 `effort` (low to max) and `mcp`: `none` by default for voice turns, `all`, or a
@@ -215,9 +227,9 @@ All run on this machine; `./setup.sh` fetches them once, at pinned versions.
 |---|---|---|---|
 | Speech recognition | Whisper large-v3-turbo, small.en (CTranslate2) | OpenAI; mobiuslabsgmbh and Systran conversions | MIT |
 | End of turn | Smart Turn v3.2 | pipecat-ai/smart-turn-v3 | BSD-2-Clause |
-| Tone of voice | emotion2vec+ large (Ma et al., 2024), ONNX export | emotion2vec/emotion2vec_plus_large; Voldorn/emotion2vec-plus-large-onnx | FunASR Model Open Source License 1.1 |
+| Tone of voice (off by default) | emotion2vec+ large (Ma et al., 2024), ONNX export | emotion2vec/emotion2vec_plus_large; Voldorn/emotion2vec-plus-large-onnx | FunASR Model Open Source License 1.1 |
 | Voices | Kokoro v1.0 | hexgrad/Kokoro-82M via kokoro-onnx | Apache-2.0 |
-| Voices | Piper LibriTTS, Ryan | rhasspy/piper-voices | see each voice's model card |
+| Voices | Piper LibriTTS | rhasspy/piper-voices | CC BY 4.0 |
 
 ## Tests
 
@@ -273,3 +285,9 @@ conversation restarts the configured pane.
 Guaardvark's API and CLI do not expose a read-only mode, so a Guaardvark
 member set to `permissions: readonly` refuses every request. It runs on your
 own machine and is `full` in `config.yaml` and for members added to the team.
+
+## Licence
+
+MIT, see `LICENSE`. The models and libraries it downloads keep their own
+licences, listed in `THIRD_PARTY_NOTICES.md`. Not affiliated with or endorsed
+by the makers of the assistants it talks to.

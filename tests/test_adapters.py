@@ -48,8 +48,8 @@ class TestDispatcher(unittest.TestCase):
 
     def test_dispatcher_registration(self):
         assistants_cfg = {
-            "claude": {"target_id": "claude", "voice": "en_US-ryan-high.onnx", "voice_speaker": 0},
-            "grok": {"target_id": "grok", "voice": "en_US-ryan-high.onnx", "voice_speaker": 0},
+            "claude": {"target_id": "claude", "voice": "en_US-libritts-high.onnx", "voice_speaker": 0},
+            "grok": {"target_id": "grok", "voice": "en_US-libritts-high.onnx", "voice_speaker": 0},
             "antigravity": {"target_id": "agy", "voice": "en_US-libritts-high.onnx", "voice_speaker": 12},
             "cursor": {"target_id": "cursor", "voice": "en_US-libritts-high.onnx", "voice_speaker": 24},
             "guaardvark": {"target_id": "guaardvark", "voice": "en_US-libritts-high.onnx", "voice_speaker": 42},

@@ -41,7 +41,7 @@ class BaseAdapter(ABC):
         self.role = str(config.get("role") or "").strip()
         # Why the last turn failed (missing CLI, not signed in, timeout), else None
         self.last_error: Optional[str] = None
-        self.voice_file = config.get("voice", "en_US-ryan-high.onnx")
+        self.voice_file = config.get("voice", "en_US-libritts-high.onnx")
         self.voice_speaker = config.get("voice_speaker", 0)
         self.workspace = os.path.expanduser(config.get("workspace") or config.get("folder") or "") or None
         self.model = config.get("model") or None

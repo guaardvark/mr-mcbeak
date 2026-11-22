@@ -181,7 +181,7 @@ class TTSEngine:
     def speak(
         self,
         text: str,
-        voice_file: str = "en_US-ryan-high.onnx",
+        voice_file: str = "en_US-libritts-high.onnx",
         speaker_id: int = 0,
         speed: float = 1.0,
         context=None,

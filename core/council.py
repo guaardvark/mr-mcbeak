@@ -83,11 +83,11 @@ def run_council(
         )
         try:
             if context and context.cancelled.is_set():
-                return "", "en_US-ryan-high.onnx", 0
+                return "", "en_US-libritts-high.onnx", 0
             return dispatch(member, full, context=context) if context else dispatch(member, full)
         except Exception as err:  # one member failing must not silence the rest
             logger.error(f"Council member {member} failed: {err}", exc_info=True)
-            return f"{display_names.get(member, member)} did not answer.", "en_US-ryan-high.onnx", 0
+            return f"{display_names.get(member, member)} did not answer.", "en_US-libritts-high.onnx", 0
 
     results: List[Tuple[str, str]] = []
 
