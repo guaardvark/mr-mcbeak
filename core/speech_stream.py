@@ -29,6 +29,7 @@ class SentenceFeed:
         self._in_code = False
         self._done = False
         self._muted = False
+        self._taken = 0          # sentences handed to the speaker so far
 
     # -- writer side -------------------------------------------------------
     def add(self, delta: str) -> bool:
@@ -60,6 +61,13 @@ class SentenceFeed:
     def spoken(self) -> str:
         with self._lock:
             return " ".join(self._out)
+
+    @property
+    def delivered(self) -> str:
+        """The sentences the speaker took, which a mute or a cancelled turn can
+        leave short of everything that was ready."""
+        with self._lock:
+            return " ".join(self._out[:self._taken])
 
     def _finish_line(self):
         self._advance(final=True)
@@ -117,4 +125,5 @@ class SentenceFeed:
                     return
                 sentence = self._out[i]
                 i += 1
+                self._taken = i
             yield sentence

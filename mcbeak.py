@@ -421,7 +421,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
         spoken = extract_speakable_text(reply)
         if announce:
             spoken = f"{display_names.get(member, member)} says: {spoken}"
-        logger.info(f"Speaking ({member}): {spoken[:120]!r}")
+        logger.info(f"Speaking ({member}): {spoken!r}")
         conversation.speak(spoken, voice_file, speaker_id, context)
 
     if use_tmux:
@@ -439,6 +439,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
         adapter = dispatcher.adapters.get(target) or dispatcher.adapters.get(state_mgr.default_assistant) \
             or dispatcher.members()[0]
         show_reply(app_name(config), text)
+        logger.info(f"Speaking ({app_name(config)}): {text!r}")
         conversation.submit(TurnContext(), lambda ctx: conversation.speak(
             text, adapter.voice_file, adapter.voice_speaker, ctx))
 
@@ -566,6 +567,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                     show_you(shown_name, prompt)
                     adapter = dispatcher.adapters.get(target)
                     show_reply(shown_name, "Okay, I won't.")
+                    logger.info(f"Speaking ({target}): \"Okay, I won't.\"")
                     conversation.submit(TurnContext(), lambda ctx: conversation.speak(
                         "Okay, I won't.", adapter.voice_file, adapter.voice_speaker, ctx))
                     return
@@ -650,6 +652,13 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                         if approving and adapter is not None:
                             adapter.approve_next = approving
                         feed, live = None, {}
+
+                        def finish_speech():
+                            # The log's only copy of a reply that was spoken as it arrived
+                            live.pop("speech").join()
+                            if feed.delivered:
+                                cut = ", interrupted" if context.cancelled.is_set() else ""
+                                logger.info(f"Spoke ({target}) as the reply arrived{cut}: {feed.delivered!r}")
                         if speak_early and getattr(adapter, "streams", False):
                             feed = SentenceFeed(max_sentences=3)
 
@@ -676,7 +685,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                             if feed:
                                 feed.mute()
                             if "speech" in live:
-                                live.pop("speech").join()
+                                finish_speech()
                             held.hold(target, waiting)
                             logger.info(f"Held for a spoken yes ({target}): {waiting}")
                             for action in waiting:
@@ -687,7 +696,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
                             # Already being spoken: show it, keep the turn, wait for the voice
                             if conversation.record_turn(target, prompt, response, context):
                                 show_reply(display_names.get(target, target), response)
-                            live["speech"].join()
+                            finish_speech()
                         elif conversation.record_turn(target, prompt, response, context):
                             speak_reply(target, response, voice_file, speaker_id, context=context)
                 except Exception:
