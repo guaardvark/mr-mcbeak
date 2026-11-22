@@ -14,6 +14,7 @@ import argparse
 import faulthandler
 import re
 from pathlib import Path
+from typing import Optional
 
 # Add project root to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -40,6 +41,7 @@ from core.sessions import SessionStore
 from core.speech_stream import SentenceFeed
 from core.council import build_prompt, run_council
 from core.single_instance import InstanceLock, describe, other_copies, stop_copies
+from core.status_server import StatusServer, port_from
 from core.diagnostics import validate_config
 from adapters.dispatcher import AdapterDispatcher
 from terminal.tmux_bridge import TmuxBridge
@@ -298,7 +300,8 @@ def print_banner(config: dict, roster: Roster, default_assistant: str):
     print(f"  Ctrl+C or Ctrl+Z quits. Log: {log_path()}\n")
 
 
-def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "config.yaml"):
+def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "config.yaml",
+                     status_port: Optional[int] = None):
     """Main continuous voice processing loop."""
     audio_cfg = config.get("audio", {})
     stt_cfg = config.get("stt", {})
@@ -311,6 +314,23 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
         getattr(logging, str(system_cfg.get("log_level", "INFO")).upper(), logging.INFO)
     )
 
+    # Answers from the first moment, so a host waiting on it sees "starting"
+    # while the models load
+    live = {"status": "starting", "roster": None, "recorder": None}
+    if status_port is not None:
+        def status_state():
+            roster, recorder = live["roster"], live["recorder"]
+            return {
+                "status": live["status"],
+                "listening": bool(recorder and recorder.listening),
+                "team": [a.get("name", k) for k, a in roster.members.items()] if roster else [],
+            }
+        try:
+            bound = StatusServer(status_port, status_state).start()
+            logger.info(f"Status endpoint on http://127.0.0.1:{bound}/health")
+        except OSError as err:
+            logger.error(f"Status port {status_port} could not be opened ({err}); listening without it")
+
     # 1. Initialize Core Engines
     logger.info(f"Starting {app_name(config)}...")
     state_mgr = StateManager(
@@ -322,6 +342,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
     if system_cfg.get("remember_conversations", True) and not use_tmux:
         sessions = SessionStore(max_age_hours=float(system_cfg.get("remember_hours", 72)))
     roster = Roster(config, sessions, warm=not use_tmux)
+    live["roster"] = roster
     display_names = roster.names
     # The kinds of assistant config.yaml describes, to recognise a spoken
     # "ask Grok to join" (with the same mishearings the wake words allow for)
@@ -713,6 +734,7 @@ def run_voice_daemon(config: dict, use_tmux: bool = False, config_path: str = "c
     )
 
     recorder.start()
+    live["recorder"], live["status"] = recorder, "ok"
     print_banner(config, roster, system_cfg.get("default_assistant", "claude"))
 
     # Handle Ctrl+C cleanly
@@ -1074,6 +1096,8 @@ def main():
     parser.add_argument("--cli", nargs=2, metavar=("TARGET", "PROMPT"), help="Direct text execution (e.g. --cli claude 'what is 2+2')")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--verbose", action="store_true", help="Also show the technical log lines in the terminal")
+    parser.add_argument("--status-port", type=int, metavar="N",
+                        help="While listening, answer GET /health on 127.0.0.1:N (also $MCBEAK_STATUS_PORT; off by default)")
 
     if len(sys.argv) > 1 and sys.argv[1] == "team":
         sys.exit(team_command(sys.argv[2:]))
@@ -1125,8 +1149,12 @@ def main():
     else:
         # Plain `mcbeak` listens. Checked before any model loads or the
         # microphone opens; the lock is held until exit.
+        try:
+            status_port = port_from(args.status_port)
+        except ValueError as err:
+            sys.exit(str(err))
         lock = claim_listener(config, replace=args.replace)  # noqa: F841 (kept open)
-        run_voice_daemon(config, use_tmux=args.tmux, config_path=args.config)
+        run_voice_daemon(config, use_tmux=args.tmux, config_path=args.config, status_port=status_port)
 
 
 if __name__ == "__main__":

@@ -298,6 +298,11 @@ class AudioRecorder:
             self._turn_checker = threading.Thread(target=self._turn_check_loop, daemon=True, name="turn-check")
             self._turn_checker.start()
 
+    @property
+    def listening(self) -> bool:
+        """Whether the microphone is open."""
+        return self._stream is not None and bool(getattr(self._stream, "active", False))
+
     def start(self):
         """Start capturing microphone input."""
         if self._running:
