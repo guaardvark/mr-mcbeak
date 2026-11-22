@@ -202,7 +202,9 @@ assistants:
     target_id: "guaardvark"
     cli_cmd: "guaardvark"
     mode: "headless"
-    api_url: "http://127.0.0.1:5000/api/enhanced-chat"   # synchronous chat; the CLI is the fallback
+    # api_url: "http://127.0.0.1:5000/api/enhanced-chat"   # Only to point at a fixed address. Left out, the
+                                   # port is read from ~/.guaardvark/runtime.json (5000 when that is missing);
+                                   # the CLI is the fallback
     permissions: "full"            # Guaardvark has no read-only mode, so read-only made it refuse every request
     use_rag: false                 # true = search indexed documents on every spoken turn (slower)
     wake_words:

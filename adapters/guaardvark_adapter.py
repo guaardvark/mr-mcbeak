@@ -6,10 +6,28 @@ import json
 import uuid
 import shutil
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any
 from adapters.base_adapter import BaseAdapter
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PORT = 5000
+CHAT_PATH = "/api/enhanced-chat"
+
+
+def runtime_file() -> Path:
+    """Where a running Guaardvark records the port its server took."""
+    return Path.home() / ".guaardvark" / "runtime.json"
+
+
+def server_port(path: Optional[Path] = None) -> int:
+    """The local Guaardvark's port: the one it last recorded, else the default."""
+    try:
+        port = int(json.loads((path or runtime_file()).read_text(encoding="utf-8")).get("backend_port"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return DEFAULT_PORT
+    return port if 0 < port < 65536 else DEFAULT_PORT
 
 
 class GuaardvarkAdapter(BaseAdapter):
@@ -20,9 +38,15 @@ class GuaardvarkAdapter(BaseAdapter):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(name="Guaardvark", target_id="guaardvark", config=config)
         self.cli_binary = shutil.which(config.get("cli_cmd") or "guaardvark") or "guaardvark"
-        self.api_url = config.get("api_url", "http://127.0.0.1:5000/api/enhanced-chat")
+        # An address set for the member wins; otherwise it is looked up on each
+        # turn, so a Guaardvark restarted on another port is still found
+        self._api_url = config.get("api_url") or None
         self.session_id = uuid.uuid4().hex
         self.use_rag = bool(config.get("use_rag", False))  # spoken turns want speed, not a document search
+
+    @property
+    def api_url(self) -> str:
+        return self._api_url or f"http://127.0.0.1:{server_port()}{CHAT_PATH}"
 
     def reset_session(self):
         self.session_id = uuid.uuid4().hex
