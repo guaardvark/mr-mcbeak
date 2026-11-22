@@ -28,7 +28,7 @@ mcbeak_bp = Blueprint("mcbeak", __name__, url_prefix="/api/mcbeak")
 # The extension folder is usually a symlink into the checkout; resolve it to find the app.
 MCBEAK_ROOT = Path(__file__).resolve().parents[2]
 BRIDGE = MCBEAK_ROOT / "guaardvark" / "bridge.py"
-STATUS_URL = f"http://127.0.0.1:{int(os.environ.get('MCBEAK_STATUS_PORT') or 8211)}/health"
+STATUS_URL = f"http://127.0.0.1:{int(os.environ.get('MCBEAK_STATUS_PORT') or 8214)}/health"
 # The team and settings decide which programs a spoken word may run and with
 # what permissions, so they change only from a browser on this machine.
 NOT_HERE = "The voice team is changed at the machine itself. Open this page in a browser on that machine."

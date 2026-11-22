@@ -3,7 +3,7 @@ SCRIPTS_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The folder Guaardvark links as extensions/mcbeak, and the checkout it sits in.
 EXT_DIR="$(cd "$SCRIPTS_DIR/../.." && pwd -P)"
 MCBEAK_ROOT="$(cd "$EXT_DIR/.." && pwd -P)"
-PORT="${MCBEAK_STATUS_PORT:-8211}"
+PORT="${MCBEAK_STATUS_PORT:-8214}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mcbeak"
 # Inside Guaardvark the pid and log sit with every other plugin's; alone, with the app's own state.
 if [[ -n "${GUAARDVARK_ROOT:-}" ]]; then

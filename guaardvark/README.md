@@ -36,8 +36,8 @@ only one copy can hold the microphone.
 
 | Piece | What it does |
 |---|---|
-| `plugin/plugin.json` | Registers the service: id `mcbeak`, `127.0.0.1:8211`, off by default |
-| `plugin/scripts/start.sh` | Runs `mcbeak --listen --status-port 8211` with no terminal and waits for `/health` |
+| `plugin/plugin.json` | Registers the service: id `mcbeak`, `127.0.0.1:8214`, off by default |
+| `plugin/scripts/start.sh` | Runs `mcbeak --listen --status-port 8214` with no terminal and waits for `/health` |
 | `plugin/scripts/stop.sh` | Stops that listener and checks it is gone; a copy run in a terminal is left alone |
 | `api/mcbeak_api.py` | `GET /api/mcbeak/status`, `GET` and `PUT` `/api/mcbeak/team` and `/api/mcbeak/settings` |
 | `bridge.py` | Reads and writes the two files for the API, in its own process with Mr. McBeak's Python |
@@ -65,7 +65,7 @@ start, stop and error lines written by the two scripts. What was heard stays in
 
 ## Another port
 
-`8211` is the default. To move it, set `MCBEAK_STATUS_PORT` in Guaardvark's
+`8214` is the default. To move it, set `MCBEAK_STATUS_PORT` in Guaardvark's
 `.env`, and put the same port in an untracked `plugin/plugin.local.json`:
 
 ```
