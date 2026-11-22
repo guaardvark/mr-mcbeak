@@ -1093,7 +1093,8 @@ def main():
     faulthandler.enable()
     parser = argparse.ArgumentParser(description="Voice cockpit for AI coding assistants",
                                      epilog="`mcbeak team` shows the team; `mcbeak team add NAME [KIND]` and "
-                                            "`mcbeak team remove NAME` change it.")
+                                            "`mcbeak team remove NAME` change it. `mcbeak transcript` writes out "
+                                            "a session as a who-said-what script.")
     parser.add_argument("--doctor", action="store_true", help="Check configuration and local dependencies without submitting prompts")
     parser.add_argument("--listen", action="store_true", help="Listen continuously (also what plain `mcbeak` does)")
     parser.add_argument("--tmux", action="store_true", help="Launch 5-pane Tmux Cockpit and voice daemon")
@@ -1110,6 +1111,9 @@ def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "team":
         sys.exit(team_command(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "transcript":
+        from core import transcript
+        sys.exit(transcript.main(sys.argv[2:], log_path()))
     args = parser.parse_args()
     try:
         config = team.apply(load_config(args.config))

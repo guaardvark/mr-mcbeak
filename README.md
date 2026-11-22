@@ -20,6 +20,7 @@ mcbeak --cli grok "what is a decorator"        # one text turn, no microphone
 mcbeak --cli team "which database should we use"   # ask everyone
 mcbeak team           # who is on the team
 mcbeak team add Grok  # add a member; see "The team"
+mcbeak transcript     # the last session as a who-said-what script; see "Transcripts"
 ```
 
 The terminal shows the conversation: what you said and to whom, each reply,
@@ -154,6 +155,43 @@ Speaking to it by name tries it again, and one good answer puts it back.
   member carries on after a restart when it was used in the last 72 hours from
   the same folder (`system.remember_conversations`, `remember_hours`). `new
   conversation` forgets it.
+
+## Transcripts
+
+`mcbeak transcript` turns the log into a script of who said what and when. It reads
+`~/.local/state/mcbeak/mcbeak.log` and its rotated copies and nothing else: the listener
+does not have to be running, and nothing is sent anywhere.
+
+```
+mcbeak transcript                                   # the last session, Markdown, to the terminal
+mcbeak transcript --session list                    # every session in the log, numbered
+mcbeak transcript --session 12 --out notes.md       # session 12 to a file
+mcbeak transcript --format srt --since 21:54 --out captions.srt
+mcbeak transcript --session all --since 2026-01-31T09:00 --format json
+```
+
+A session runs from one start of the listener to the next. `--format` is `md`, `txt`,
+`srt` or `json`. `--since` and `--until` take `HH:MM` (on the session's day) or a full
+date and time. `--no-tone` drops the tone-of-voice note, and `--all` adds speech that
+was heard but said to nobody by name.
+
+```
+**21:55:42 You** (to Team; tone: happy): Hey team. Everybody ready?
+
+- **21:55:47 Cursor Agent:** *could not answer*
+- **21:55:52 Guaardvark:** I'm ready! Let's get to work whenever you're set.
+```
+
+A name said on its own ("Hey team.") is joined to the question that follows it, and a
+team round is listed under its question in the order the answers were spoken. SRT
+captions count from the session start, or from `--since` when it is given, so a clip
+that starts mid-session lines up. The log keeps whole seconds and no end times, so
+each caption lasts as long as its words take to read, or until the next one starts.
+
+Replies spoken while they were still being written are logged in full once they
+finish. Sessions from before that change show such a reply as *reply spoken as it
+arrived; its text was not logged*, and replies longer than 120 characters from those
+sessions end in an ellipsis where the old log cut them.
 
 ## Safety
 
